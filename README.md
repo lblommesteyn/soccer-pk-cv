@@ -19,40 +19,50 @@ authorized sources → manifests → CV / pose ingest → canonical per-PK table
 
 | | |
 | --- | --- |
-| Penalties discovered across all candidate sources | **554** |
-| Openly accessible and ingested | **352 records → 221 unique** |
-| Processed end to end | **220** |
-| Contact frame resolved | **96.4%** |
-| Snapshot available at -1000 ms / 0 ms | **90.9% / 96.4%** |
-| Keeper, ball, goal geometry recovered | **0 — see [the honest limitation](#the-central-limitation)** |
+| Penalties discovered across all candidate sources | **603** |
+| Real penalty **video**, freely licensed | **49 clips** (Wikimedia Commons) |
+| Pose-table penalties, labelled but no footage | **220** (Mendeley) |
+| Gated behind an NDA or agreement form | **301** (SoccerNet, SoccerDB) |
 
-Run `python -m pkcv report` for the live version of this table.
+Run `python -m pkcv report` for the live version.
 
-## The central limitation
+## What it produces
 
-Read this before using the data.
+For each penalty clip, anchored on estimated ball contact:
 
-The two openly licensed penalty deposits (Mendeley `brx9bsxnpx` v1 and v2)
-publish **the kicker's 2D pose and nothing else**. Both describe a `Videos.zip`
-in their "Steps to reproduce" text, but neither version actually deposits it —
-verified against the Mendeley file API, not inferred from the landing page. The
-figshare mirror ships MP4s, but they are skeleton renders on a black background
-(measured: under 0.5% non-black pixels), not footage.
+- **goal frame** as a real quadrilateral, recovered per frame so it tracks a
+  panning handheld camera;
+- **goalkeeper** and **kicker**, identified from the penalty's own geometry
+  rather than from appearance, each with a 2D pose;
+- **ball** position and trajectory;
+- **ball contact**, **keeper commit**, and the canonical snapshot ladder;
+- a QC overlay drawn on the source footage showing all of it.
 
-So for every penalty currently in this dataset there is **no goalkeeper, no
-ball, and no goal geometry** — and none is estimated. Those columns exist in the
-schema and are filled with explicit `missing_reason` values. A pipeline that
-quietly produced keeper positions from a source containing no keeper would be
-worse than one that produces none.
+```bash
+python scripts/run_clip.py data/raw/commons/clips/<clip>.mp4
+```
 
-The video-capable half of the pipeline (`pkcv/vision/`) is implemented, tested
-and ready; it activates the moment a source with real footage becomes
-accessible. Two such sources are inventoried and blocked only on credentials:
+## Sources, and what each can actually give you
 
-- **SoccerNet-v2** — 173 penalty annotations across 148 matches. Video is under
-  an NDA; set `SOCCERNET_PASSWORD` to unlock.
-- **SoccerDB** — 128 penalty segments with event-tight bounds, 37 of whose
-  half-videos map onto SoccerNet matches. Needs a signed agreement form.
+**Wikimedia Commons** is the only open source with real footage. It hosts
+spectator- and press-filmed penalty video under CC0, CC BY, CC BY-SA and
+public-domain terms, containing the whole scene: shooter, goalkeeper, ball, goal
+and net. 62 candidate videos, 49 usable after filtering. It supplies no outcome
+labels, so kick direction and result are left null rather than inferred.
+
+**Mendeley `brx9bsxnpx`** (v1 EPL, v2 women's collegiate) supplies 220 labelled
+penalties but **only the kicker's 2D pose**. Both versions describe a
+`Videos.zip` in their "Steps to reproduce" text; neither actually deposits it,
+verified against the Mendeley file API. For those records there is no
+goalkeeper, no ball and no goal geometry, and none is estimated -- the columns
+exist and carry explicit `missing_reason` values.
+
+**SoccerNet-v2** (173 penalties) and **SoccerDB** (128 segments) are inventoried
+but gated behind an NDA and an agreement form. Their adapters are written and
+ready; set `SOCCERNET_PASSWORD` to unlock the former.
+
+See [`docs/SOURCES.md`](docs/SOURCES.md) for the full audit, including the
+upstream defects found while verifying each one.
 
 ## Install
 

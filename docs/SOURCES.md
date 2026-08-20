@@ -6,6 +6,7 @@ than its landing page. Regenerate the machine-readable version with
 
 | source | penalties | access | media | licence |
 | --- | --- | --- | --- | --- |
+| `commons` | 49 usable of 62 found | open | **real video** | per file: CC0 / CC BY / CC BY-SA / PD |
 | `mendeley-epl-v1` | 88 | open | pose table | CC BY 4.0 |
 | `mendeley-women-v2` | 132 in file (133 claimed) | open | pose table | CC BY 4.0 |
 | `figshare-women-v2` | 132 | open | skeleton renders | CC BY 4.0 |
@@ -14,6 +15,49 @@ than its landing page. Regenerate the machine-readable version with
 
 Total discovered: **554**. Openly accessible: **352 records → 221 unique
 penalties** after deduplication.
+
+---
+
+## Wikimedia Commons -- the only open source with real footage
+
+This is the source that makes the project's original question answerable.
+Commons hosts spectator- and press-filmed penalty video under CC0, CC BY,
+CC BY-SA and public-domain terms: freely downloadable, redistributable with
+attribution, and containing the whole scene -- shooter, goalkeeper, ball, goal
+and net. No NDA, no agreement form.
+
+A search across eight language variants returns 62 videos; 49 survive filtering.
+Licence, author and share-alike status are read per file from the Commons API
+and written into each record, so attribution is never assumed.
+
+Three things had to be handled.
+
+**"Penalty" is not unique to association football.** The search returns ice
+hockey penalty shots, rugby penalty goals, and a wrestling move of the same
+name. Titles are filtered against a sport blocklist, but the real test is the
+vision stage: a clip only yields a penalty if a goal with a net is found in it.
+
+**Share-alike is not the same as permissive.** 49 of 49 permit redistribution
+with attribution, but 30 are CC BY-SA, so any republished copy must carry the
+same licence. That obligation is recorded per record rather than flattened into
+a single project-wide licence claim.
+
+**Quality varies enormously**, because these are filmed from the stands. Some
+are 4K from behind the goal; others are a wide stadium view where the kicker is
+forty pixels tall. Frame size and duration are recorded at ingest and QC grades
+what was actually recoverable.
+
+**No outcome labels.** Commons supplies footage, not annotations. Kick
+direction, goalkeeper direction and outcome are left null rather than inferred,
+because an inferred label is a model output and must never be stored where a
+consumer would read it as ground truth. Labelling these clips is a separate,
+explicit step.
+
+Not yet ingested: a 4K, 717-second CC BY 4.0 recording of a full Russian Cup
+final penalty shootout. It exceeds the 240 s clip cap because it holds roughly
+ten penalties in one file under one camera, which makes it the highest-value
+single asset here -- but it needs a shootout splitter to cut it into individual
+kicks first.
 
 ---
 
