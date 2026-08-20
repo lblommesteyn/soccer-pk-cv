@@ -622,7 +622,9 @@ class ClipProcessor:
                 )
             idx += 1
         cap.release()
-        return pd.DataFrame(rows)
+
+        df = pd.DataFrame(rows)
+        return _reject_inconsistent_goals(df, prov)
 
     # ----------------------------------------------------------------- events
 
@@ -789,6 +791,47 @@ class ClipProcessor:
 
 # ------------------------------------------------------------------ helpers
 
+
+
+def _reject_inconsistent_goals(df: pd.DataFrame, prov: dict) -> pd.DataFrame:
+    """Drop per-frame goal quads that disagree with the clip's own consensus.
+
+    The goal is a rigid object: across one clip its apparent width and position
+    change smoothly as the camera moves. A frame whose quad is twice the median
+    width, or sits half a goal away from where the goal has been all clip, has
+    latched onto a fence, a hoarding or a stand railing. Such frames look
+    plausible in isolation and are only detectable against the consensus, so
+    they are rejected here rather than in the single-frame detector.
+
+    Rejected frames become missing rows with their own reason, not deleted rows.
+    """
+    if not len(df) or "goal_width_px" not in df:
+        return df
+    ok = ~df["is_missing"].astype(bool)
+    if ok.sum() < 5:
+        return df
+
+    med_w = float(np.nanmedian(df.loc[ok, "goal_width_px"]))
+    cx = (df["quad_tl_x"] + df["quad_tr_x"]) / 2
+    cy = (df["quad_tl_y"] + df["quad_bl_y"]) / 2
+    med_cx = float(np.nanmedian(cx[ok]))
+    med_cy = float(np.nanmedian(cy[ok]))
+    if not np.isfinite(med_w) or med_w <= 0:
+        return df
+
+    bad_w = ok & ((df["goal_width_px"] > med_w * 1.5) | (df["goal_width_px"] < med_w * 0.6))
+    bad_pos = ok & (np.hypot(cx - med_cx, cy - med_cy) > 0.75 * med_w)
+    bad = bad_w | bad_pos
+    if not bad.any():
+        return df
+
+    cols = [c for c in df.columns if c.startswith("quad_") or c in (
+        "post_left_x", "post_left_y", "post_right_x", "post_right_y", "crossbar_y",
+        "goal_width_px", "goal_height_px", "px_per_m", "net_edge_density", "confidence")]
+    df.loc[bad, cols] = np.nan
+    df.loc[bad, "is_missing"] = True
+    df.loc[bad, "missing_reason"] = "goal_inconsistent_with_clip_consensus"
+    return df
 
 def _goal_centre(geometry: pd.DataFrame | None, upto_frame: int | None = None):
     """Median goal-mouth centre and width over the frames where it was found."""

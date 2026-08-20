@@ -104,7 +104,7 @@ def _meta(media="pose_table", **kw):
 def _frames_df(n=20, missing=False):
     return pd.DataFrame(
         [{"pk_id": "t:1", "role": "kicker", "frame_idx": i, "track_id": "a",
-          "is_missing": missing} for i in range(n)]
+          "bbox_h": 120.0, "is_missing": missing} for i in range(n)]
     )
 
 
@@ -115,9 +115,10 @@ def _poses_df(n=20, missing=False):
     )
 
 
-def _events_df(missing=False, method="source_last_touch"):
+def _events_df(missing=False, method="source_last_touch", frame_idx=15):
     return pd.DataFrame(
-        [{"pk_id": "t:1", "event_name": "ball_contact", "is_missing": missing,
+        [{"pk_id": "t:1", "event_name": "ball_contact",
+          "frame_idx": None if missing else frame_idx, "is_missing": missing,
           "confidence": None if missing else 1.0, "method": method,
           "missing_reason": "source_has_no_last_touch_marker" if missing else None}]
     )

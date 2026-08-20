@@ -88,11 +88,30 @@ def check_kick(
     if not len(kicker):
         out.append(_row(pk_id, source, "kicker_track", FAIL, message="no kicker track rows"))
     else:
-        coverage = float((~kicker["is_missing"].astype(bool)).sum()) / max(n_frames, 1)
+        # Coverage is measured over the run-up window, not the whole clip. A
+        # video penalty is often embedded in footage that starts long before the
+        # kicker walks up and continues through the celebration, so whole-clip
+        # coverage measures how much unrelated footage the clip contains rather
+        # than how well the kicker was tracked.
+        seen = kicker[~kicker["is_missing"].astype(bool)]
+        window = None
+        contact_row = events[events["event_name"] == "ball_contact"] if len(events) else events
+        if len(contact_row) and pd.notna(contact_row["frame_idx"].iloc[0]) and pd.notna(meta_row.get("fps")):
+            cf = int(contact_row["frame_idx"].iloc[0])
+            fps_v = float(meta_row["fps"])
+            lo = cf - int(abs(SNAPSHOT_OFFSETS_MS[0]) / 1000.0 * fps_v)
+            window = (max(lo, 0), cf)
+        if window is not None:
+            span = max(window[1] - window[0] + 1, 1)
+            got = int(((seen["frame_idx"] >= window[0]) & (seen["frame_idx"] <= window[1])).sum())
+            denom, label = span, f"{got}/{span} run-up frames"
+        else:
+            got, denom = len(seen), max(n_frames, 1)
+            label = f"{got}/{denom} clip frames (no contact anchor to window on)"
+        coverage = got / denom
         out.append(
             _row(pk_id, source, "kicker_track", PASS if coverage >= th["min_kicker_coverage"] else WARN,
-                 coverage, th["min_kicker_coverage"],
-                 message=f"{int((~kicker['is_missing'].astype(bool)).sum())}/{n_frames} frames with a box")
+                 coverage, th["min_kicker_coverage"], message=label)
         )
         n_tracks = int(kicker["track_id"].nunique())
         out.append(
