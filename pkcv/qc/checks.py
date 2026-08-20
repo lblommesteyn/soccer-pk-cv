@@ -28,6 +28,13 @@ DEFAULTS = {
     "fps_max": 120.0,
     "min_frames": 10,
     "min_goal_frames": 0.60,
+    # Apparent player size in pixels. Measured across the Commons corpus:
+    # clips whose contact anchored had a median role-box height around 121 px,
+    # those that failed around 61 px. Ball size scales with player size, and the
+    # ball is the smallest thing the pipeline must find, so this is the binding
+    # constraint on whether a clip is processable at all.
+    "warn_scene_scale_px": 85.0,
+    "fail_scene_scale_px": 50.0,
 }
 
 
@@ -178,6 +185,34 @@ def check_kick(
     else:
         status, msg = FAIL, "source supplies labels but this record has no kick direction"
     out.append(_row(pk_id, source, "labels_present", status, len(have), 1, message=msg))
+
+    # ---- scene scale (video sources only) ----------------------------------
+    if pose_table_like:
+        out.append(
+            _row(pk_id, source, "scene_scale", NA,
+                 message=f"source is {media}; no footage to measure apparent size in")
+        )
+    else:
+        cols = getattr(tracks, "columns", [])
+        obs = (
+            tracks[(tracks["frame_idx"] >= 0) & tracks["bbox_h"].notna()]
+            if {"bbox_h", "frame_idx", "role"} <= set(cols)
+            else tracks.iloc[0:0]
+        )
+        if not len(obs):
+            out.append(_row(pk_id, source, "scene_scale", FAIL, message="no boxes to measure"))
+        else:
+            scale = float(obs.groupby("role")["bbox_h"].median().max())
+            status = (
+                PASS if scale >= th["warn_scene_scale_px"]
+                else WARN if scale >= th["fail_scene_scale_px"]
+                else FAIL
+            )
+            out.append(
+                _row(pk_id, source, "scene_scale", status, scale, th["warn_scene_scale_px"],
+                     message=f"median role-box height {scale:.0f}px; "
+                             "below ~85px the ball is too small to track reliably")
+            )
 
     # ---- goal geometry (video sources only) --------------------------------
     if pose_table_like:

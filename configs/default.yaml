@@ -18,7 +18,9 @@ vision:
   # process on the same card.
   det_weights: yolo11m.pt
   pose_weights: yolo11m-pose.pt
-  imgsz: 960
+  # null means: match the source width, capped at max_imgsz (see runner.py)
+  imgsz: null
+  max_imgsz: 1920
   device: cuda:0
   half: true
   person_conf: 0.35

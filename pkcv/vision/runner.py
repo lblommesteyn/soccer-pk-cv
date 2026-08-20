@@ -41,7 +41,13 @@ class VisionUnavailable(RuntimeError):
 class VisionConfig:
     det_weights: str = "yolo11m.pt"
     pose_weights: str = "yolo11m-pose.pt"
-    imgsz: int = 960
+    #: Inference resolution. ``None`` means "match the source, capped at
+    #: ``max_imgsz``", which is what the measurements support: on a 1920-wide
+    #: clip the ball is found only at 1920 (960 and 1536 both return nothing),
+    #: while on a 1280-wide clip inferring at 1536 returns nothing where 960
+    #: returns detections. Upscaling past native resolution actively hurts.
+    imgsz: int | None = None
+    max_imgsz: int = 1920
     device: str = "cuda:0"
     half: bool = True
     person_conf: float = 0.35
@@ -150,6 +156,18 @@ class ClipProcessor:
 
     # ------------------------------------------------------------------- main
 
+    def _resolve_imgsz(self, video_path: str) -> int:
+        """Inference size for this clip: explicit, else source width capped."""
+        if self.cfg.imgsz:
+            return int(self.cfg.imgsz)
+        import cv2
+
+        cap = cv2.VideoCapture(str(video_path))
+        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 960
+        cap.release()
+        size = min(w, self.cfg.max_imgsz)
+        return max(320, int(round(size / 32)) * 32)
+
     def process(self, pk_id: str, source: str, video_path: str | Path, fps: float) -> ClipResult:
         video_path = str(video_path)
         result = ClipResult()
@@ -200,7 +218,7 @@ class ClipProcessor:
             tracker=self.cfg.tracker,
             classes=[COCO_PERSON, COCO_SPORTS_BALL],
             conf=min(self.cfg.person_conf, self.cfg.ball_conf),
-            imgsz=self.cfg.imgsz,
+            imgsz=self._resolve_imgsz(video_path),
             device=self.cfg.device,
             half=self.cfg.half,
             max_det=self.cfg.max_det,
@@ -459,7 +477,7 @@ class ClipProcessor:
         stream = self.pose.predict(
             source=video_path,
             stream=True,
-            imgsz=self.cfg.imgsz,
+            imgsz=self._resolve_imgsz(video_path),
             device=self.cfg.device,
             half=self.cfg.half,
             conf=self.cfg.person_conf,
