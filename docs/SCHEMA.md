@@ -94,11 +94,33 @@ Three coordinate systems: `x, y` (image pixels), `x_c, y_c` (box-centred), and
 flipped for left-side cameras. Only `x_n, y_n` are comparable across clips;
 without the flip, "leans right" means opposite things at opposite camera angles.
 
-## `ball.parquet`, `geometry.parquet`
+## `ball.parquet`
 
-Ball position/velocity per frame; goal posts, crossbar and `px_per_m` per kick.
-Both currently all-missing for every ingested penalty — see
-[`SOURCES.md`](SOURCES.md).
+Ball position, box size and velocity per frame, with `is_missing` where the ball
+was not detected. All-missing for the Mendeley pose-table records, populated for
+video sources.
+
+## `geometry.parquet` — one row **per frame**, not per kick
+
+The goal is stored as a real quadrilateral: `quad_tl_*`, `quad_tr_*`,
+`quad_br_*`, `quad_bl_*`, ordered top-left, top-right, bottom-right,
+bottom-left, plus derived `post_left_x`, `post_right_x`, `crossbar_y`,
+`goal_width_px`, `goal_height_px` and `net_edge_density`.
+
+Per frame rather than per kick because this footage is handheld and pans: a
+single quad drifts off the goal within a second. Frames where the goal was not
+confidently found carry `is_missing` with a reason, so a consumer can see
+exactly when the goal was in shot.
+
+`px_per_m` comes from the 7.32 m goal width. **It fixes scale along the goal
+line only.** It is not a homography and must not be used to measure distances
+across the pitch.
+
+Detection rate varies enormously with framing, and that variation is real data
+about the clip rather than noise to be smoothed away. On a behind-the-goal
+handheld clip the goal is located on 100% of frames; on a wide oblique stadium
+view with the goal at the frame edge it drops below 5%. The `goal_geometry` QC
+check records the per-clip rate so the usable subset can be selected on it.
 
 ## `events.parquet` — one row per (kick, event)
 
@@ -109,9 +131,29 @@ Both currently all-missing for every ingested penalty — see
 | --- | --- |
 | `source_last_touch` | the deposit marks exactly one contact frame (confidence 1.0) |
 | `source_last_touch_latest_of_multiple` | several markers from a fragmented track; latest taken (confidence 0.5) |
-| `ball_speed_onset` | derived from video: first large speed step while the ball is near the kicker's feet |
-| `keeper_lateral_velocity_threshold` | first frame the keeper exceeds 0.25 body-heights/s laterally |
+| `stationary_ball_departure_observed` | derived from video: the ball sat on the spot, then was seen leaving it |
+| `stationary_ball_track_ends_on_spot` | the stationary track ended without a departure being seen -- the tracker lost the struck ball. Same event, weaker evidence, confidence 0.45 |
+| `keeper_lateral_velocity_threshold` | first frame the keeper exceeds 0.35 body-heights/s laterally, searched only in a window around contact |
 | `not_attempted` | the input needed does not exist in this source |
+
+### Why contact is departure, not acceleration
+
+The intuitive rule -- wait for ball speed to rise -- cannot work on real
+penalty footage, and it fails silently. A penalty ball is stationary on the
+spot, which a detector tracks very well; the instant it is struck it crosses
+tens of pixels per frame and the tracker **loses** it. On the first real clip
+tested, the ball track sat at x≈507, y≈595 for 240 consecutive frames and then
+simply ended. Ball speed never rose at all, so a speed-threshold detector
+reports "no contact" on a clip containing an obvious penalty.
+
+Contact is therefore detected as departure from the spot. The two branches --
+departure seen, versus track ending while still on the spot -- are reported
+through different `method` values and different confidences, because they are
+different strengths of evidence for the same event.
+
+This also fixes role assignment downstream: the kicker is whoever stands over
+the ball at contact, which is far more reliable than "the track that moves
+most" (that picks officials and running defenders).
 
 ## `temporal_frames.parquet` — one row per observed frame
 
