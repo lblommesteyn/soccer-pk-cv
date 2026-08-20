@@ -45,3 +45,6 @@ Thumbs.db
 
 # staged HF upload payload (regenerate with `pkcv publish --dry-run`)
 data/hf_staging/
+
+# per-clip detection caches
+*.det.pkl

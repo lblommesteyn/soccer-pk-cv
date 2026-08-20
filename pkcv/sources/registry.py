@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pkcv.sources.base import SourceAdapter
+from pkcv.sources.commons import WikimediaCommonsPenalties
 from pkcv.sources.figshare_pk import FigshareWomenMirror
 from pkcv.sources.mendeley_pk import MendeleyEPLv1, MendeleyWomenV2
 from pkcv.sources.soccerdb import SoccerDBPenalties
@@ -11,6 +12,7 @@ from pkcv.sources.soccernet import SoccerNetPenalties
 ADAPTERS: dict[str, type[SourceAdapter]] = {
     cls.slug: cls
     for cls in (
+        WikimediaCommonsPenalties,
         MendeleyEPLv1,
         MendeleyWomenV2,
         FigshareWomenMirror,
@@ -21,6 +23,8 @@ ADAPTERS: dict[str, type[SourceAdapter]] = {
 
 #: Convenience aliases accepted by `--source`.
 ALIASES = {
+    "commons": ["commons"],
+    "video": ["commons"],
     "mendeley": ["mendeley-epl-v1", "mendeley-women-v2"],
     "figshare": ["figshare-women-v2"],
     "soccernet": ["soccernet-v2"],

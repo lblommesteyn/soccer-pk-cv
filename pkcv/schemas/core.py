@@ -221,6 +221,19 @@ GEOMETRY_SCHEMA = _with_provenance(
         pa.field("post_right_x", pa.float64(), nullable=True),
         pa.field("post_right_y", pa.float64(), nullable=True),
         pa.field("crossbar_y", pa.float64(), nullable=True),
+        # Full quadrilateral, in image pixels, ordered
+        # top-left, top-right, bottom-right, bottom-left. A goal filmed from the
+        # stand is a trapezoid, not an axis-aligned box, so the corners are kept
+        # rather than a bounding rectangle.
+        pa.field("quad_tl_x", pa.float64(), nullable=True),
+        pa.field("quad_tl_y", pa.float64(), nullable=True),
+        pa.field("quad_tr_x", pa.float64(), nullable=True),
+        pa.field("quad_tr_y", pa.float64(), nullable=True),
+        pa.field("quad_br_x", pa.float64(), nullable=True),
+        pa.field("quad_br_y", pa.float64(), nullable=True),
+        pa.field("quad_bl_x", pa.float64(), nullable=True),
+        pa.field("quad_bl_y", pa.float64(), nullable=True),
+        pa.field("net_edge_density", pa.float64(), nullable=True),
         pa.field("goal_width_px", pa.float64(), nullable=True),
         pa.field("goal_height_px", pa.float64(), nullable=True),
         pa.field("px_per_m", pa.float64(), nullable=True),

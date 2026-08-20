@@ -67,7 +67,19 @@ class VisionConfig:
     #: The goal mouth is a mesh, so it is edge-dense. Broadcast graphics and
     #: flat wall panels form the same two-posts-and-a-bar shape but are smooth;
     #: measured on real footage the gap is 0.07-0.10 against 0.01-0.03.
-    net_min_edge_density: float = 0.05
+    net_min_edge_density: float = 0.045
+    #: Ball speed, in goal-widths per second, that counts as struck, and how
+    #: many consecutive frames must exceed it.
+    #: How far, in goal-widths, the ball may drift and still count as sitting
+    #: on the spot. Camera pan moves it a few pixels even when it is still.
+    spot_tol_goal_widths: float = 0.05
+    #: A ball must hold still this long to be believed to be on the spot.
+    min_stationary_s: float = 0.4
+    #: Window around contact in which a keeper's dive counts as a commitment.
+    commit_window_before_s: float = 1.2
+    commit_window_after_s: float = 0.6
+    #: Lateral speed, in keeper body-heights per second, that counts as a dive.
+    commit_lateral_speed: float = 0.35
 
     @classmethod
     def from_dict(cls, d: dict[str, Any] | None) -> VisionConfig:
@@ -82,6 +94,7 @@ class ClipResult:
     ball: pd.DataFrame = field(default_factory=pd.DataFrame)
     geometry: pd.DataFrame = field(default_factory=pd.DataFrame)
     events: pd.DataFrame = field(default_factory=pd.DataFrame)
+    roles: pd.DataFrame = field(default_factory=pd.DataFrame)
     failures: list[str] = field(default_factory=list)
 
 
@@ -143,10 +156,17 @@ class ClipProcessor:
             result.failures.append("no_person_detections")
             return result
 
+        # Order matters: geometry gives the scale that contact needs, and
+        # contact gives the instant that role assignment needs.
         result.geometry = self._geometry_rows(pk_id, source, video_path)
-        roles = self._assign_roles(persons, result.geometry)
+        contact = self._contact_frame(balls, result.geometry, fps)
+        if contact["frame_idx"] is None and contact.get("reason"):
+            result.failures.append(f"contact:{contact['reason']}")
+
+        roles = self._assign_roles(persons, result.geometry, balls, contact["frame_idx"])
         persons = persons.merge(roles, on="track_id", how="left")
         persons["role"] = persons["role"].fillna("other")
+        result.roles = roles
 
         kicker_id = _first_track_for(roles, "kicker")
         keeper_id = _first_track_for(roles, "keeper")
@@ -154,11 +174,10 @@ class ClipProcessor:
         result.tracks = self._track_rows(pk_id, source, persons, fps, video_path)
         result.ball = self._ball_rows(pk_id, source, balls, fps, video_path)
         result.poses = self._pose_rows(pk_id, source, video_path, persons, kicker_id, keeper_id, fps)
+        result.events = self._event_rows(
+            pk_id, source, persons, balls, kicker_id, keeper_id, contact, fps
+        )
 
-        contact = self._contact_frame(persons, balls, kicker_id, fps)
-        result.events = self._event_rows(pk_id, source, persons, balls, kicker_id, keeper_id, contact, fps)
-
-        # Anchor every table on the contact frame once it is known.
         if contact["frame_idx"] is not None:
             for df in (result.tracks, result.poses, result.ball):
                 if len(df):
@@ -211,26 +230,35 @@ class ClipProcessor:
 
     # ------------------------------------------------------------------ roles
 
-    def _assign_roles(self, persons: pd.DataFrame, geometry: pd.DataFrame | None = None) -> pd.DataFrame:
-        """Assign kicker / keeper by track geometry.
+    def _assign_roles(
+        self,
+        persons: pd.DataFrame,
+        geometry: pd.DataFrame | None = None,
+        balls: pd.DataFrame | None = None,
+        contact_frame: int | None = None,
+    ) -> pd.DataFrame:
+        """Assign kicker and keeper.
 
-        There is no keeper class in COCO to appeal to, so roles are inferred:
+        COCO has no goalkeeper class, so both roles are inferred from the
+        penalty's own geometry rather than from appearance:
 
-        * **keeper** -- the person who spends the clip closest to the goal
-          mouth, measured in goal-widths. This needs the goal, so when goal
-          geometry is missing it degrades to "the person highest in frame",
-          which is a much weaker proxy and is scored accordingly. On a wide
-          broadcast angle that fallback picks people beyond the touchline, so
-          the confidence it reports is deliberately low.
-        * **kicker** -- among the rest, the track whose box travels furthest
-          relative to its own height, because a penalty taker runs up.
+        * **keeper** -- the track that spends the run-up closest to the goal
+          mouth, in goal-widths. Measured before contact, because after contact
+          the keeper dives and outfield players pour into the box.
+        * **kicker** -- the track closest to the ball at the moment of contact.
+          This is what actually defines the kicker, and it is far more reliable
+          than "the person who moves most", which on any real clip picks a
+          running defender or a panning-induced track.
 
-        Both are heuristics, and both carry a confidence so downstream code can
-        weigh them rather than trust them.
+        When contact or the ball is unavailable the kicker falls back to
+        greatest travel during the run-up, at a reduced confidence, and
+        ``role_basis`` records which rule was used.
         """
-        empty = pd.DataFrame(columns=["track_id", "role", "role_confidence"])
+        empty = pd.DataFrame(columns=["track_id", "role", "role_confidence", "role_basis"])
         if not len(persons):
             return empty
+
+        n_frames = persons["frame_idx"].nunique()
         agg = persons.groupby("track_id").agg(
             n=("frame_idx", "size"),
             cx_med=("cx", "median"),
@@ -239,45 +267,75 @@ class ClipProcessor:
             cy_span=("cy", lambda s: float(s.max() - s.min())),
             h_med=("h", "median"),
         )
-        # Ignore blink-length tracks: they are detector noise, not people.
-        agg = agg[agg["n"] >= max(3, int(0.1 * persons["frame_idx"].nunique()))]
+        agg = agg[agg["n"] >= max(3, int(0.08 * n_frames))]
         if not len(agg):
             return empty
-
         agg["travel"] = np.hypot(agg["cx_span"], agg["cy_span"]) / agg["h_med"].clip(lower=1)
 
-        goal = None
-        if geometry is not None and len(geometry) and not bool(geometry["is_missing"].iloc[0]):
-            g = geometry.iloc[0]
-            goal = (
-                (float(g["post_left_x"]) + float(g["post_right_x"])) / 2.0,
-                (float(g["crossbar_y"]) + float(max(g["post_left_y"], g["post_right_y"]))) / 2.0,
-                max(float(g["goal_width_px"]), 1.0),
-            )
+        goal = _goal_centre(geometry, upto_frame=contact_frame)
 
+        # ---- keeper -------------------------------------------------------
         if goal is not None:
             gx, gy, gw = goal
-            agg["goal_dist"] = np.hypot(agg["cx_med"] - gx, agg["cy_med"] - gy) / gw
-            keeper = agg["goal_dist"].idxmin()
-            keeper_conf = _separation_conf(agg["goal_dist"], keeper, smaller_is_better=True)
-            keeper_basis = "nearest_goal_mouth"
+            pre = persons if contact_frame is None else persons[persons["frame_idx"] <= contact_frame]
+            pre = pre if len(pre) else persons
+            dist = (
+                pre.assign(d=np.hypot(pre["cx"] - gx, pre["cy"] - gy) / gw)
+                .groupby("track_id")["d"]
+                .median()
+                .reindex(agg.index)
+            )
+            keeper = dist.idxmin()
+            keeper_conf = _separation_conf(dist.dropna(), keeper, smaller_is_better=True)
+            keeper_basis = "nearest_goal_mouth_pre_contact"
         else:
             keeper = agg["cy_med"].idxmin()
-            # Halved: without the goal this is a proxy, not a measurement.
             keeper_conf = 0.5 * _separation_conf(agg["cy_med"], keeper, smaller_is_better=True)
             keeper_basis = "highest_in_frame_no_goal_geometry"
 
-        remaining = agg.drop(index=keeper)
-        kicker = remaining["travel"].idxmax() if len(remaining) else None
+        # ---- kicker -------------------------------------------------------
+        remaining = agg.drop(index=keeper, errors="ignore")
+        kicker, kicker_conf, kicker_basis = None, None, None
+        if len(remaining):
+            # The ball is usually *not* detected on the contact frame itself --
+            # the tracker loses it the moment it is struck. The kicker is the
+            # player standing over the spot, so the last observed ball position
+            # at or before contact is the right anchor, and it is the spot.
+            ball_at_contact = None
+            if balls is not None and len(balls) and contact_frame is not None:
+                upto = balls[balls["frame_idx"] <= contact_frame]
+                if len(upto):
+                    last = upto.sort_values("frame_idx").iloc[-1]
+                    ball_at_contact = (float(last["cx"]), float(last["cy"]))
+            if ball_at_contact is not None:
+                # Look in a short window around contact: on the contact frame
+                # alone the kicker's box can be missed by one detection.
+                w = max(2, int(0.08 * n_frames / 10) + 2)
+                near = persons[
+                    (persons["frame_idx"] >= contact_frame - w)
+                    & (persons["frame_idx"] <= contact_frame + w)
+                ]
+                near = near[near["track_id"].isin(remaining.index)]
+                if len(near):
+                    bx, by = ball_at_contact
+                    d = np.hypot(near["cx"] - bx, near["cy"] - by) / near["h"].clip(lower=1)
+                    near = near.assign(d=d).groupby("track_id")["d"].min()
+                    kicker = near.idxmin()
+                    kicker_conf = _separation_conf(near, kicker, smaller_is_better=True)
+                    kicker_basis = "nearest_ball_spot_at_contact"
+            if kicker is None:
+                kicker = remaining["travel"].idxmax()
+                kicker_conf = 0.5 * _separation_conf(
+                    remaining["travel"], kicker, smaller_is_better=False
+                )
+                kicker_basis = "greatest_travel_no_contact_anchor"
 
         rows = []
         for tid in agg.index:
             if tid == keeper:
                 role, conf, basis = "keeper", keeper_conf, keeper_basis
-            elif tid == kicker:
-                role = "kicker"
-                conf = _separation_conf(remaining["travel"], kicker, smaller_is_better=False)
-                basis = "greatest_travel"
+            elif kicker is not None and tid == kicker:
+                role, conf, basis = "kicker", kicker_conf, kicker_basis
             else:
                 role, conf, basis = "other", None, None
             rows.append(
@@ -445,180 +503,135 @@ class ClipProcessor:
 
     # --------------------------------------------------------------- geometry
 
-    def _goal_from_frame(self, frame) -> dict | None:
-        """Find the goal frame in one image, or return None.
-
-        Two near-vertical lines wide apart are the posts; the highest point they
-        reach is the crossbar. Broadcast goals are filmed at an angle, so
-        "vertical" is generous. This is a heuristic, not a calibration, and the
-        confidence it returns says so.
-        """
-        import cv2
-
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        edges = cv2.Canny(gray, 60, 180)
-        lines = cv2.HoughLinesP(
-            edges, 1, np.pi / 180, threshold=60, minLineLength=frame.shape[0] // 8, maxLineGap=14
-        )
-        if lines is None or not len(lines):
-            return None
-        # OpenCV 4 returns (N, 1, 4); OpenCV 5 returns (N, 4). Normalise rather
-        # than indexing blind -- reading the wrong shape silently finds nothing,
-        # which looks exactly like "there is no goal here".
-        segs = np.asarray(lines, dtype=float).reshape(-1, 4)
-
-        dx = segs[:, 2] - segs[:, 0]
-        dy = segs[:, 3] - segs[:, 1]
-        length = np.hypot(dx, dy)
-        from_vertical = np.abs(np.degrees(np.arctan2(np.abs(dx), np.abs(dy) + 1e-6)))
-        keep = (from_vertical < self.cfg.post_max_lean_deg) & (length > frame.shape[0] * 0.06)
-        verticals = segs[keep]
-        if len(verticals) < 2:
-            return None
-
-        mid_x = (verticals[:, 0] + verticals[:, 2]) / 2
-        order = np.argsort(mid_x)
-        left, right = verticals[order[0]], verticals[order[-1]]
-        lx, rx = mid_x[order[0]], mid_x[order[-1]]
-        width = float(rx - lx)
-        if width < self.cfg.goal_min_width_frac * frame.shape[1]:
-            return None
-
-        crossbar_y = float(min(left[1], left[3], right[1], right[3]))
-        base_y = float(max(left[1], left[3], right[1], right[3]))
-        height = base_y - crossbar_y
-        if height <= 0 or not (self.cfg.goal_min_aspect < width / height < self.cfg.goal_max_aspect):
-            return None
-
-        roi = frame[max(int(crossbar_y), 0) : int(base_y), max(int(lx), 0) : int(rx)]
-        if roi.size == 0:
-            return None
-        net_density = float(
-            cv2.Canny(cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY), 50, 150).mean() / 255.0
-        )
-        if net_density < self.cfg.net_min_edge_density:
-            return None
-        return {
-            "net_edge_density": net_density,
-            "post_left_x": float(lx),
-            "post_left_y": float(max(left[1], left[3])),
-            "post_right_x": float(rx),
-            "post_right_y": float(max(right[1], right[3])),
-            "crossbar_y": crossbar_y,
-            "goal_width_px": width,
-            "goal_height_px": float(height),
-            # A regulation goal is 7.32 m wide; that fixes the scale along the
-            # goal line only, not across the pitch.
-            "px_per_m": width / 7.32,
-            # Two-line heuristic, not a calibration. Confidence tracks how
-            # net-like the mouth is rather than how many lines were found.
-            "confidence": float(np.clip(net_density / 0.12, 0.2, 0.75)),
-        }
-
     def _geometry_rows(self, pk_id, source, video_path) -> pd.DataFrame:
-        """Locate the goal frame, probing several frames across the clip.
+        """Recover the goal quad on every frame.
 
-        Probing only the first frame is wrong for any clip that opens on a
-        close-up: the goal is simply not in shot yet. The widest candidate found
-        across the probes wins, and its frame index is recorded.
-
-        Returns a missing row when no frame yields a confident goal, which is the
-        common case on a tight kicker-side camera where the posts are out of
-        shot. Nothing is extrapolated.
+        Per-frame rather than once per clip: this footage is handheld and pans,
+        so a single quad drifts off the goal within a second. Frames where the
+        goal is not confidently found produce a missing row, so a consumer can
+        see exactly when the goal was in shot.
         """
         import cv2
 
-        prov = _prov("opencv-hough", cv2.__version__, f"pkcv:vision/geometry:{Path(video_path).name}")
-        miss = {
-            "pk_id": pk_id,
-            "source": source,
-            "frame_idx": None,
-            "is_missing": True,
-            "missing_reason": "goal_frame_not_detected",
-            **prov,
-        }
+        from pkcv.vision.geometry import GoalConfig, find_goal
+
+        prov = _prov(
+            "pkcv-goal-quad", cv2.__version__, f"pkcv:vision/geometry:{Path(video_path).name}"
+        )
+        gcfg = GoalConfig(
+            min_width_frac=self.cfg.goal_min_width_frac,
+            max_lean_deg=self.cfg.post_max_lean_deg,
+            min_aspect=self.cfg.goal_min_aspect,
+            max_aspect=self.cfg.goal_max_aspect,
+            min_net_density=self.cfg.net_min_edge_density,
+        )
+
         cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
-            miss["missing_reason"] = "video_unreadable"
-            return pd.DataFrame([miss])
-        n = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 1
-        probes = np.unique(
-            np.linspace(0, max(n - 1, 0), max(self.cfg.geometry_probe_frames, 1)).astype(int)
-        )
+            return pd.DataFrame(
+                [{"pk_id": pk_id, "source": source, "frame_idx": None, "is_missing": True,
+                  "missing_reason": "video_unreadable", **prov}]
+            )
 
-        best, best_frame, probed = None, None, 0
-        for f in probes:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, int(f))
+        rows = []
+        idx = 0
+        while True:
             ok, frame = cap.read()
             if not ok:
-                continue
-            probed += 1
-            cand = self._goal_from_frame(frame)
-            if cand and (best is None or cand["net_edge_density"] > best["net_edge_density"]):
-                best, best_frame = cand, int(f)
+                break
+            g = find_goal(frame, gcfg)
+            if g is None:
+                rows.append(
+                    {"pk_id": pk_id, "source": source, "frame_idx": idx, "is_missing": True,
+                     "missing_reason": "no_goal_like_structure_in_frame", **prov}
+                )
+            else:
+                q = g.pop("quad")
+                rows.append(
+                    {
+                        "pk_id": pk_id, "source": source, "frame_idx": idx,
+                        "quad_tl_x": float(q[0][0]), "quad_tl_y": float(q[0][1]),
+                        "quad_tr_x": float(q[1][0]), "quad_tr_y": float(q[1][1]),
+                        "quad_br_x": float(q[2][0]), "quad_br_y": float(q[2][1]),
+                        "quad_bl_x": float(q[3][0]), "quad_bl_y": float(q[3][1]),
+                        **g, "is_missing": False, "missing_reason": None, **prov,
+                    }
+                )
+            idx += 1
         cap.release()
-
-        if best is None:
-            miss["missing_reason"] = (
-                "video_unreadable" if probed == 0 else "no_goal_like_structure_in_probed_frames"
-            )
-            return pd.DataFrame([miss])
-        best.pop("net_edge_density", None)
-        return pd.DataFrame(
-            [
-                {
-                    "pk_id": pk_id,
-                    "source": source,
-                    "frame_idx": best_frame,
-                    **best,
-                    "is_missing": False,
-                    "missing_reason": None,
-                    **prov,
-                }
-            ]
-        )
+        return pd.DataFrame(rows)
 
     # ----------------------------------------------------------------- events
 
-    def _contact_frame(self, persons, balls, kicker_id, fps) -> dict:
-        """Ball contact = the frame where the ball's speed first jumps while it
-        is close to the kicker's feet.
+    def _contact_frame(self, balls, geometry, fps) -> dict:
+        """Ball contact = the frame the ball leaves the penalty spot.
 
-        A penalty ball is stationary until struck, so the first large positive
-        step in ball speed is the strike. Requiring proximity to the kicker
-        rejects a speed jump caused by a redetection elsewhere in the frame.
+        The obvious rule -- wait for ball speed to rise -- does not work, and the
+        reason is worth recording. A penalty ball is stationary on the spot,
+        which a detector tracks very well; the instant it is struck it crosses
+        tens of pixels per frame and the tracker *loses* it. On real footage the
+        stationary track simply ends at contact and speed never rises at all.
+
+        So contact is detected as departure rather than acceleration:
+
+        1. find the ball track that holds still longest -- that is the ball on
+           the spot, not a ball in the crowd or a second ball on the touchline;
+        2. contact is the first frame it moves further than ``spot_tol`` from
+           that spot, or, if the track simply ends, the frame after its last
+           stationary observation.
+
+        Both branches are reported through ``method`` so a consumer can tell a
+        seen departure from an inferred one.
         """
-        if kicker_id is None or not len(balls):
-            return {"frame_idx": None, "confidence": None, "method": "ball_speed_onset", "reason": "no_ball_or_kicker_track"}
-        best = balls.groupby("track_id").size().idxmax()
-        b = balls[balls["track_id"] == best].sort_values("frame_idx")
-        if len(b) < 4:
-            return {"frame_idx": None, "confidence": None, "method": "ball_speed_onset", "reason": "ball_track_too_short"}
-        k = persons[persons["track_id"] == kicker_id].set_index("frame_idx")
-        t = b["frame_idx"].to_numpy(float) / fps
-        vx, vy = _central_diff(b["cx"].to_numpy(float), b["cy"].to_numpy(float), t)
-        speed = np.hypot(vx, vy)
-        scale = float(k["h"].median()) if len(k) else 1.0
-        speed_n = speed / max(scale, 1.0)  # body-heights per second
-        near = []
-        for i, (_, r) in enumerate(b.iterrows()):
-            f = int(r["frame_idx"])
-            if f not in k.index:
-                near.append(np.inf)
+        miss = {"frame_idx": None, "confidence": None, "method": "stationary_ball_departure"}
+        if balls is None or not len(balls):
+            return {**miss, "reason": "no_ball_detections"}
+
+        scale = _median_goal_width(geometry)
+        if scale is None:
+            return {**miss, "reason": "no_goal_geometry_for_scale"}
+        tol = self.cfg.spot_tol_goal_widths * scale
+        min_still = max(int(self.cfg.min_stationary_s * fps), 5)
+
+        # Score each track by how long it stays inside a tol-sized box.
+        best = None
+        for tid, g in balls.groupby("track_id"):
+            g = g.sort_values("frame_idx")
+            if len(g) < min_still:
                 continue
-            kr = k.loc[f]
-            kr = kr.iloc[0] if isinstance(kr, pd.DataFrame) else kr
-            near.append(float(np.hypot(r["cx"] - kr["cx"], r["cy"] - kr["cy"]) / max(kr["h"], 1.0)))
-        near = np.asarray(near)
-        cand = np.where((speed_n > 3.0) & (near < 1.5))[0]
-        if not len(cand):
-            return {"frame_idx": None, "confidence": None, "method": "ball_speed_onset", "reason": "no_speed_onset_near_kicker"}
-        i = int(cand[0])
-        margin = float(speed_n[i] / max(np.nanmedian(speed_n[:i]) if i else 1e-6, 1e-6))
+            spot_x = float(g["cx"].iloc[: max(len(g) // 2, 3)].median())
+            spot_y = float(g["cy"].iloc[: max(len(g) // 2, 3)].median())
+            near = (np.hypot(g["cx"] - spot_x, g["cy"] - spot_y) <= tol).to_numpy()
+            run = 0
+            for v in near:
+                if not v:
+                    break
+                run += 1
+            if run >= min_still and (best is None or run > best["run"]):
+                best = {"tid": tid, "g": g, "spot": (spot_x, spot_y), "near": near, "run": run}
+
+        if best is None:
+            return {**miss, "reason": "no_stationary_ball_track_found"}
+
+        g, near, run = best["g"], best["near"], best["run"]
+        frames = g["frame_idx"].to_numpy(int)
+
+        if run < len(near):
+            # The ball was still seen moving away: departure is observed.
+            return {
+                "frame_idx": int(frames[run]),
+                "confidence": float(np.clip(run / (self.cfg.min_stationary_s * fps * 2), 0.3, 0.9)),
+                "method": "stationary_ball_departure_observed",
+                "reason": None,
+            }
+
+        # The track ends while still on the spot: the tracker lost the struck
+        # ball. Contact is the next frame, and confidence is lower because the
+        # departure itself was never seen.
         return {
-            "frame_idx": int(b["frame_idx"].iloc[i]),
-            "confidence": float(np.clip(margin / 10.0, 0.1, 0.95)),
-            "method": "ball_speed_onset",
+            "frame_idx": int(frames[-1]) + 1,
+            "confidence": 0.45,
+            "method": "stationary_ball_track_ends_on_spot",
             "reason": None,
         }
 
@@ -639,28 +652,38 @@ class ClipProcessor:
             }
         ]
 
-        # Keeper commit: first frame at which lateral speed exceeds a quarter of
-        # a body height per second and keeps rising -- a real dive, not a shuffle.
+        # Keeper commit: the first decisive lateral movement, searched only in a
+        # window around contact. Searched over the whole clip it fires on the
+        # keeper shuffling along his line a full four seconds early, which is
+        # not a commitment to a side.
         commit = {"frame_idx": None, "confidence": None, "reason": "no_keeper_track"}
         if keeper_id is not None:
             kp = persons[persons["track_id"] == keeper_id].sort_values("frame_idx")
-            if len(kp) >= 4:
-                t = kp["frame_idx"].to_numpy(float) / fps
-                vx, _ = _central_diff(kp["cx"].to_numpy(float), kp["cy"].to_numpy(float), t)
-                scale = max(float(kp["h"].median()), 1.0)
-                lat = np.abs(vx) / scale
-                idx = np.where(lat > 0.25)[0]
-                if len(idx):
-                    i = int(idx[0])
-                    commit = {
-                        "frame_idx": int(kp["frame_idx"].iloc[i]),
-                        "confidence": float(np.clip(lat[i], 0.1, 0.95)),
-                        "reason": None,
-                    }
-                else:
-                    commit["reason"] = "keeper_lateral_speed_never_exceeded_threshold"
-            else:
+            if contact["frame_idx"] is None:
+                commit["reason"] = "no_contact_anchor_to_window_around"
+            elif len(kp) < 4:
                 commit["reason"] = "keeper_track_too_short"
+            else:
+                lo = contact["frame_idx"] - self.cfg.commit_window_before_s * fps
+                hi = contact["frame_idx"] + self.cfg.commit_window_after_s * fps
+                w = kp[(kp["frame_idx"] >= lo) & (kp["frame_idx"] <= hi)]
+                if len(w) < 4:
+                    commit["reason"] = "no_keeper_observations_near_contact"
+                else:
+                    t = w["frame_idx"].to_numpy(float) / fps
+                    vx, _ = _central_diff(w["cx"].to_numpy(float), w["cy"].to_numpy(float), t)
+                    scale = max(float(w["h"].median()), 1.0)
+                    lat = np.abs(vx) / scale
+                    idx = np.where(lat > self.cfg.commit_lateral_speed)[0]
+                    if len(idx):
+                        i = int(idx[0])
+                        commit = {
+                            "frame_idx": int(w["frame_idx"].iloc[i]),
+                            "confidence": float(np.clip(lat[i] / self.cfg.commit_lateral_speed / 4, 0.15, 0.9)),
+                            "reason": None,
+                        }
+                    else:
+                        commit["reason"] = "keeper_lateral_speed_never_exceeded_threshold"
         rows.append(
             {
                 "pk_id": pk_id,
@@ -702,6 +725,34 @@ class ClipProcessor:
 
 
 # ------------------------------------------------------------------ helpers
+
+
+def _goal_centre(geometry: pd.DataFrame | None, upto_frame: int | None = None):
+    """Median goal-mouth centre and width over the frames where it was found."""
+    if geometry is None or not len(geometry):
+        return None
+    g = geometry[~geometry["is_missing"].astype(bool)]
+    if upto_frame is not None:
+        pre = g[g["frame_idx"] <= upto_frame]
+        g = pre if len(pre) else g
+    if not len(g):
+        return None
+    cx = float(np.nanmedian((g["quad_tl_x"] + g["quad_tr_x"]) / 2))
+    cy = float(np.nanmedian((g["quad_tl_y"] + g["quad_bl_y"]) / 2))
+    gw = float(np.nanmedian(g["goal_width_px"]))
+    if not np.isfinite(cx) or not np.isfinite(gw) or gw <= 0:
+        return None
+    return cx, cy, gw
+
+
+def _median_goal_width(geometry: pd.DataFrame | None) -> float | None:
+    if geometry is None or not len(geometry):
+        return None
+    g = geometry[~geometry["is_missing"].astype(bool)]
+    if not len(g):
+        return None
+    gw = float(np.nanmedian(g["goal_width_px"]))
+    return gw if np.isfinite(gw) and gw > 0 else None
 
 
 def _first_track_for(roles: pd.DataFrame, role: str) -> int | None:
