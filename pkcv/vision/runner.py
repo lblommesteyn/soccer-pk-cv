@@ -48,6 +48,12 @@ class VisionConfig:
     #: returns detections. Upscaling past native resolution actively hurts.
     imgsz: int | None = None
     max_imgsz: int = 1920
+    #: Extra resolutions to retry at when the first pass yields no usable ball.
+    #: There is no single best value: on one 1280-wide clip 960 finds the ball
+    #: and 1280 and 1536 find nothing, while on a 1920-wide clip only 1920 works.
+    #: Detection is cheap relative to a lost penalty, so failures are retried and
+    #: the scale that produces the longest stationary ball run wins.
+    retry_imgsz: tuple[int, ...] = (960, 1280, 1920)
     device: str = "cuda:0"
     half: bool = True
     person_conf: float = 0.35
@@ -182,6 +188,13 @@ class ClipProcessor:
         # contact gives the instant that role assignment needs.
         result.geometry = self._geometry_rows(pk_id, source, video_path)
         contact = self._contact_frame(balls, result.geometry, fps)
+
+        if contact["frame_idx"] is None:
+            persons, balls, contact, note = self._retry_scales(
+                video_path, result.geometry, fps, persons, balls, contact
+            )
+            if note:
+                result.failures.append(note)
         if contact["frame_idx"] is None and contact.get("reason"):
             result.failures.append(f"contact:{contact['reason']}")
 
@@ -208,7 +221,35 @@ class ClipProcessor:
 
     # ------------------------------------------------------- detect and track
 
-    def _detect_and_track(self, video_path: str) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
+    def _retry_scales(self, video_path, geometry, fps, persons, balls, contact):
+        """Re-detect at other resolutions when the ball was not usable.
+
+        The ball is a handful of pixels and its detectability is not monotonic
+        in inference size, so a single failure is not evidence that the clip is
+        unusable -- only that this scale was wrong. Each candidate scale is
+        judged on the thing that actually matters, whether it yields a contact
+        anchor, and the first that does wins.
+        """
+        if self.cfg.imgsz:
+            return persons, balls, contact, None  # explicit size: respect it
+
+        first = self._resolve_imgsz(video_path)
+        tried = [first]
+        for size in self.cfg.retry_imgsz:
+            if size in tried:
+                continue
+            tried.append(size)
+            p2, b2, _ = self._detect_and_track(video_path, imgsz=size)
+            if not len(b2):
+                continue
+            c2 = self._contact_frame(b2, geometry, fps)
+            if c2["frame_idx"] is not None:
+                return p2, b2, c2, f"contact_recovered_at_imgsz_{size}"
+        return persons, balls, contact, f"no_contact_at_any_of_imgsz_{tried}"
+
+    def _detect_and_track(
+        self, video_path: str, imgsz: int | None = None
+    ) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
         failures: list[str] = []
         person_rows, ball_rows = [], []
         stream = self.det.track(
@@ -218,7 +259,7 @@ class ClipProcessor:
             tracker=self.cfg.tracker,
             classes=[COCO_PERSON, COCO_SPORTS_BALL],
             conf=min(self.cfg.person_conf, self.cfg.ball_conf),
-            imgsz=self._resolve_imgsz(video_path),
+            imgsz=imgsz or self._resolve_imgsz(video_path),
             device=self.cfg.device,
             half=self.cfg.half,
             max_det=self.cfg.max_det,
