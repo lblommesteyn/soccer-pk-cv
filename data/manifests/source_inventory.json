@@ -1,0 +1,234 @@
+[
+  {
+    "access": "open",
+    "access_note": "public download, no credential required; 1 file(s) deposited",
+    "attribution": "Li, Feiting; Pifer, Nathan David (Florida State University). Mendeley Data, doi:10.17632/brx9bsxnpx",
+    "checked_at_utc": "2026-08-20T00:26:10+00:00",
+    "deposit_family": "mendeley-brx9bsxnpx-epl",
+    "doi": "10.17632/brx9bsxnpx.1",
+    "files": [
+      {
+        "content_type": "text/csv",
+        "download_url": "https://data.mendeley.com/public-files/datasets/brx9bsxnpx/files/337239f9-f847-4af9-b1a1-fda85218c5f1/file_downloaded",
+        "filename": "kicker_pose_keypoints.csv",
+        "sha256_upstream": "5e78f9e1fedf77737d7cdebffff63bc05b013187fb403f287e09ca479ba23d27",
+        "size_bytes": 2640030
+      }
+    ],
+    "labels_available": [
+      "kick_direction",
+      "goal",
+      "footedness",
+      "camera_direction"
+    ],
+    "license": "CC BY 4.0",
+    "license_url": "https://creativecommons.org/licenses/by/4.0/",
+    "media_kind": "pose_table",
+    "n_pk_accessible": 88,
+    "n_pk_discovered": 88,
+    "notes": [
+      "No video in the public file listing. The deposit's 'Steps to reproduce' text references a Videos.zip inside an 'Instructions and Code' folder, but that folder is not published under this version -- the clips are not obtainable from Mendeley. Keeper, ball and goal geometry are therefore underivable from this source."
+    ],
+    "redistribute_derived": true,
+    "redistribute_video": false,
+    "redistribution_note": "CC BY 4.0 permits redistribution of derived tables with attribution. No video is present in this deposit, so no video redistribution question arises.",
+    "source": "mendeley-epl-v1",
+    "title": "EPL Penalty Kick Data Recorded by a Computer Vision Model",
+    "url": "https://data.mendeley.com/datasets/brx9bsxnpx/1"
+  },
+  {
+    "access": "open",
+    "access_note": "public download, no credential required; 1 file(s) deposited",
+    "attribution": "Li, Feiting; Pifer, Nathan David (Florida State University). Mendeley Data, doi:10.17632/brx9bsxnpx",
+    "checked_at_utc": "2026-08-20T00:26:11+00:00",
+    "deposit_family": "womens-collegiate-li-pifer",
+    "doi": "10.17632/brx9bsxnpx.2",
+    "files": [
+      {
+        "content_type": "text/csv",
+        "download_url": "https://data.mendeley.com/public-files/datasets/brx9bsxnpx/files/96a3af04-daa7-481d-8154-863c0e36346d/file_downloaded",
+        "filename": "penalty_pose_keypoints.csv",
+        "sha256_upstream": "226e23ec3fca656c70478fcff09fb93db28c42a1c07a06580346f37f376cd20b",
+        "size_bytes": 7283095
+      }
+    ],
+    "labels_available": [
+      "kick_direction",
+      "goal",
+      "footedness",
+      "camera_direction"
+    ],
+    "license": "CC BY 4.0",
+    "license_url": "https://creativecommons.org/licenses/by/4.0/",
+    "media_kind": "pose_table",
+    "n_pk_accessible": 133,
+    "n_pk_discovered": 133,
+    "notes": [
+      "No video in the public file listing. The deposit's 'Steps to reproduce' text references a Videos.zip inside an 'Instructions and Code' folder, but that folder is not published under this version -- the clips are not obtainable from Mendeley. Keeper, ball and goal geometry are therefore underivable from this source."
+    ],
+    "redistribute_derived": true,
+    "redistribute_video": false,
+    "redistribution_note": "CC BY 4.0 permits redistribution of derived tables with attribution. No video is present in this deposit, so no video redistribution question arises.",
+    "source": "mendeley-women-v2",
+    "title": "Women\u2019s Soccer Penalty Kick Data Captured by Computer Vision Models",
+    "url": "https://data.mendeley.com/datasets/brx9bsxnpx/2"
+  },
+  {
+    "access": "open",
+    "access_note": "public download, no credential required",
+    "attribution": "Feiting Li; N. David Pifer",
+    "checked_at_utc": "2026-08-20T00:26:12+00:00",
+    "deposit_family": "womens-collegiate-li-pifer",
+    "doi": "10.6084/m9.figshare.31464526.v2",
+    "files": [
+      {
+        "download_url": "https://ndownloader.figshare.com/files/62574604",
+        "filename": "DecisionTree.ipynb",
+        "md5_upstream": "46a64b77ce09d8661c2a5b9a95069f5f",
+        "size_bytes": 293665
+      },
+      {
+        "download_url": "https://ndownloader.figshare.com/files/62574607",
+        "filename": "Womens_Soccer_Penalty_Kick_README.ipynb",
+        "md5_upstream": "306598b69f45efa9615b4e5e6b6a6742",
+        "size_bytes": 921721
+      },
+      {
+        "download_url": "https://ndownloader.figshare.com/files/62574610",
+        "filename": "Visuals.ipynb",
+        "md5_upstream": "5fd945c078394e07b20bc226c5f167c6",
+        "size_bytes": 199844
+      },
+      {
+        "download_url": "https://ndownloader.figshare.com/files/62574613",
+        "filename": "Pose_Detection.py",
+        "md5_upstream": "ec3fe667a79cfb5fa32a3850af0750ba",
+        "size_bytes": 44208
+      },
+      {
+        "download_url": "https://ndownloader.figshare.com/files/62691070",
+        "filename": "penalty_pose_keypoints.csv",
+        "md5_upstream": "d6f176ffbe8b48eb04b5e94ecac1cfba",
+        "size_bytes": 8858928
+      },
+      {
+        "download_url": "https://ndownloader.figshare.com/files/62691079",
+        "filename": "Boxplots_kp13xc_kp10xc_kp13yc (Fig9).png",
+        "md5_upstream": "dfc687c01e6c53d3ed82ca18d8df4934",
+        "size_bytes": 68714
+      },
+      {
+        "download_url": "https://ndownloader.figshare.com/files/62691082",
+        "filename": "Trend_Line (Fig6).png",
+        "md5_upstream": "2e87721ed30613b359f17c69bfd0d641",
+        "size_bytes": 110976
+      },
+      {
+        "download_url": "https://ndownloader.figshare.com/files/62691085",
+        "filename": "Skeleton Videos.zip",
+        "md5_upstream": "b0f33d9b7f1b38065c4d5940352f7ad7",
+        "size_bytes": 90583080
+      },
+      {
+        "download_url": "https://ndownloader.figshare.com/files/62691088",
+        "filename": "Skeleton (Fig5).png",
+        "md5_upstream": "6618ead6182a3592120474bbead60ecd",
+        "size_bytes": 164140
+      },
+      {
+        "download_url": "https://ndownloader.figshare.com/files/62691091",
+        "filename": "DecisionTree (Fig8).png",
+        "md5_upstream": "b6fccdce02524a5e9a63e93cee4a089c",
+        "size_bytes": 515927
+      }
+    ],
+    "labels_available": [
+      "(labels live in the Mendeley v2 CSV mirror of this deposit)"
+    ],
+    "license": "CC BY 4.0",
+    "license_url": "https://creativecommons.org/licenses/by/4.0/",
+    "media_kind": "render_only",
+    "n_pk_accessible": 132,
+    "n_pk_discovered": 132,
+    "notes": [
+      "Duplicate of Mendeley brx9bsxnpx v2 (same authors, same kicks). Ingested as a media attachment to the Mendeley records, not as new penalties.",
+      "Skeleton renders only -- no real footage, so keeper/ball/goal geometry remain underivable."
+    ],
+    "redistribute_derived": true,
+    "redistribute_video": true,
+    "redistribution_note": "CC BY 4.0 and the renders contain no third-party footage (skeleton strokes on black), so they are redistributable with attribution.",
+    "source": "figshare-women-v2",
+    "title": "Frame-Level Women\u2019s Soccer Penalty-Kick Data Captured by Computer Vision Models",
+    "url": "https://figshare.com/articles/dataset/_/31464526"
+  },
+  {
+    "access": "gated",
+    "access_note": "Video requires a SoccerNet NDA password. Set SOCCERNET_PASSWORD to enable. Labels-only inventory recorded; no penalties processed from this source.",
+    "attribution": "Deliege et al., SoccerNet-v2 (CVPR-W 2021)",
+    "checked_at_utc": "2026-08-20T00:26:12+00:00",
+    "deposit_family": "soccernet-v2",
+    "doi": null,
+    "files": [
+      {
+        "count": 500,
+        "filename": "Labels-v2.json"
+      }
+    ],
+    "labels_available": [
+      "penalty_award_timestamp",
+      "team",
+      "visibility"
+    ],
+    "license": "Labels: CC BY 4.0. Video: SoccerNet NDA, redistribution prohibited.",
+    "license_url": "https://www.soccer-net.org/data",
+    "media_kind": "video",
+    "n_pk_accessible": 0,
+    "n_pk_discovered": 173,
+    "notes": [
+      "173 'Penalty' annotations across 148 matches",
+      "'Penalty' marks the award, not the kick; timestamps are 1 s resolution. Contact must be re-derived from video -- the label cannot be used as t=0."
+    ],
+    "redistribute_derived": true,
+    "redistribute_video": false,
+    "redistribution_note": "Video is NDA-restricted and must never be republished. Derived numeric artifacts are publishable; frames and clips are not.",
+    "source": "soccernet-v2",
+    "title": "SoccerNet-v2 action spotting -- Penalty annotations",
+    "url": "https://www.soccer-net.org/"
+  },
+  {
+    "access": "gated",
+    "access_note": "Video requires either the SoccerDB agreement form (emailed to Xinhua Zhiyun) or the SoccerNet NDA. Neither is held, so no penalties are processable from this source.",
+    "attribution": "Jiang et al., SoccerDB (ACM MMSPORTS 2020)",
+    "checked_at_utc": "2026-08-20T00:26:13+00:00",
+    "deposit_family": "soccerdb",
+    "doi": "10.1145/3422844.3423051",
+    "files": [
+      {
+        "filename": "seg_info.csv"
+      },
+      {
+        "filename": "SoccerDB2SoccerNet.csv"
+      }
+    ],
+    "labels_available": [
+      "penalty_segment_bounds",
+      "highlight_class"
+    ],
+    "license": "Annotations: publicly posted on GitHub, licence unstated. Video: signed agreement form / SoccerNet NDA.",
+    "license_url": "https://github.com/newsdata/SoccerDB/tree/master/dataset",
+    "media_kind": "none",
+    "n_pk_accessible": 0,
+    "n_pk_discovered": 128,
+    "notes": [
+      "128 penalty-kick segments across 63 half-videos",
+      "37 of those half-videos map to SoccerNet matches, so a SoccerNet NDA holder could cut those segments directly using the bounds published here.",
+      "Segment bounds are event-tight (event_start_time/event_end_time), unlike SoccerNet's award-instant annotation."
+    ],
+    "redistribute_derived": false,
+    "redistribute_video": false,
+    "redistribution_note": "No licence is declared for the annotation tables, so neither they nor anything derived from them is republished. Counts and locations only.",
+    "source": "soccerdb",
+    "title": "SoccerDB -- Penalty Kick segments (class 8)",
+    "url": "https://github.com/newsdata/SoccerDB"
+  }
+]

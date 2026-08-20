@@ -1,0 +1,47 @@
+# --- raw media: NEVER commit ---
+data/raw/
+data/cache/
+*.mp4
+*.mkv
+*.avi
+*.mov
+*.zip
+
+# --- derived artifacts (regenerate via `python -m pkcv`) ---
+data/processed/
+data/qc/
+!data/qc/.gitkeep
+
+# --- model weights ---
+*.pt
+*.onnx
+*.engine
+models/
+
+# --- python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+
+# --- secrets ---
+.env
+.env.*
+!.env.example
+*token*.txt
+secrets/
+
+# --- os ---
+.DS_Store
+Thumbs.db
+
+# staged HF upload payload (regenerate with `pkcv publish --dry-run`)
+data/hf_staging/

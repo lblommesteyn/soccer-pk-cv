@@ -1,0 +1,45 @@
+# pkcv default configuration.
+# Override the data root with PKCV_DATA_ROOT, or pass --config with your own file.
+
+data_root: data
+
+sources:
+  mendeley-epl-v1: {}
+  mendeley-women-v2: {}
+  figshare-women-v2: {}
+  soccernet-v2:
+    # Video needs a SoccerNet NDA password. Set SOCCERNET_PASSWORD in the
+    # environment; never put it here.
+    video_files: ["1_224p.mkv", "2_224p.mkv"]
+  soccerdb: {}
+
+vision:
+  # Sized for a 10 GB RTX 3080: YOLO11m at 960 px leaves headroom for a second
+  # process on the same card.
+  det_weights: yolo11m.pt
+  pose_weights: yolo11m-pose.pt
+  imgsz: 960
+  device: cuda:0
+  half: true
+  person_conf: 0.35
+  ball_conf: 0.15
+  tracker: botsort.yaml
+  max_det: 40
+
+temporal:
+  # Refuse to interpolate a snapshot across a gap wider than three frames at
+  # 25 fps -- beyond that limb positions are not linear in time.
+  max_interp_gap_ms: 120
+
+qc:
+  min_pose_completeness: 0.70
+  warn_pose_completeness: 0.90
+  min_kicker_coverage: 0.80
+  min_snapshot_coverage: 0.50
+  fps_min: 10.0
+  fps_max: 120.0
+  min_frames: 10
+
+hf:
+  repo_id: lblommesteyn/soccer-pk-cv
+  private: true

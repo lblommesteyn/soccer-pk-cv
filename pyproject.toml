@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pkcv"
+version = "0.1.0"
+description = "Reproducible soccer penalty-kick computer-vision dataset pipeline"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Luke Blommesteyn" }]
+
+dependencies = [
+    "numpy>=1.24",
+    "pandas>=2.0",
+    "pyarrow>=14",
+    "scipy>=1.10",
+    "opencv-python>=4.8",
+    "pyyaml>=6.0",
+    "requests>=2.31",
+    "tqdm>=4.66",
+    "huggingface_hub>=0.24",
+]
+
+[project.optional-dependencies]
+# Vision stack. Kept optional so `ingest`, `qc` and `publish` run on a machine
+# with no GPU / no torch.
+vision = [
+    "torch>=2.1",
+    "ultralytics>=8.2",
+]
+dev = [
+    "pytest>=7.4",
+    "ruff>=0.5",
+]
+
+[project.scripts]
+pkcv = "pkcv.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["pkcv*"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# `anchorpy` is an unrelated globally-installed package whose pytest plugin
+# imports pytest_asyncio at collection time; disable it so the suite runs on a
+# machine that happens to have it.
+addopts = "-p no:anchorpy"
+filterwarnings = ["ignore::DeprecationWarning"]
