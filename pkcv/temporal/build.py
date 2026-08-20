@@ -72,6 +72,8 @@ def build_frames(
     pk_id = meta_row["pk_id"]
     fps = float(meta_row["fps"]) if pd.notna(meta_row.get("fps")) else np.nan
 
+    if "role" not in getattr(tracks, "columns", []):
+        return pd.DataFrame()
     kicker = tracks[(tracks["role"] == "kicker") & (tracks["frame_idx"] >= 0)].copy()
     if not len(kicker):
         return pd.DataFrame()
@@ -105,7 +107,9 @@ def build_frames(
     df["kicker_speed"] = np.hypot(kicker["vx_px_s"], kicker["vy_px_s"])
     df["kicker_available"] = ~kicker["is_missing"].astype(bool)
 
-    pose_kick = poses[poses["role"] == "kicker"]
+    # A clip can yield tracks but no pose at all (nobody matched a pose box).
+    # That is an empty frame with no columns, not a frame with zero rows.
+    pose_kick = poses[poses["role"] == "kicker"] if ("role" in getattr(poses, "columns", [])) else poses.iloc[0:0]
     if len(pose_kick):
         pf = feat.compute(pose_kick, meta_row.get("label_footedness"), fps)
         df = df.join(pf, how="left")
@@ -127,7 +131,11 @@ def build_frames(
     df["pose_available"] = df["pose_available"].astype("boolean").fillna(False).astype(bool)
     df["pose_n_visible_kp"] = pd.to_numeric(df["pose_n_visible_kp"], errors="coerce").fillna(0).astype(int)
 
-    keeper = tracks[(tracks["role"] == "keeper") & (tracks["frame_idx"] >= 0)]
+    keeper = (
+        tracks[(tracks["role"] == "keeper") & (tracks["frame_idx"] >= 0)]
+        if "role" in getattr(tracks, "columns", [])
+        else tracks.iloc[0:0]
+    )
     if len(keeper):
         k = keeper.sort_values("frame_idx").drop_duplicates("frame_idx", keep="last").set_index("frame_idx")
         df["keeper_cx"] = k["bbox_cx"]
@@ -140,7 +148,12 @@ def build_frames(
         df["keeper_available"] = False
     df["keeper_available"] = df["keeper_available"].astype("boolean").fillna(False).astype(bool)
 
-    if ball is not None and len(ball) and (ball["frame_idx"] >= 0).any():
+    if (
+        ball is not None
+        and len(ball)
+        and "frame_idx" in getattr(ball, "columns", [])
+        and (ball["frame_idx"] >= 0).any()
+    ):
         b = (
             ball[ball["frame_idx"] >= 0]
             .sort_values("frame_idx")

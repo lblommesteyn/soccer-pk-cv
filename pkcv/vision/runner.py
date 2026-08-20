@@ -47,7 +47,11 @@ class VisionConfig:
     person_conf: float = 0.35
     ball_conf: float = 0.15  # the ball is small and low-contrast; a low bar plus
     # a trajectory filter beats a high bar plus dropouts
-    tracker: str = "botsort.yaml"
+    #: BoT-SORT's global motion compensation raises inside OpenCV 5's sparse
+    #: optical flow and silently falls back to the identity transform, so its
+    #: main advantage on handheld footage is unavailable anyway -- and it emits
+    #: one warning per frame. ByteTrack does the same job here without either.
+    tracker: str = "bytetrack.yaml"
     max_det: int = 40
     #: A goalkeeper stands near the goal line; a kicker approaches from the
     #: penalty spot. Roles are assigned geometrically rather than by class.

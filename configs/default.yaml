@@ -23,7 +23,7 @@ vision:
   half: true
   person_conf: 0.35
   ball_conf: 0.15
-  tracker: botsort.yaml
+  tracker: bytetrack.yaml
   max_det: 40
 
 temporal:

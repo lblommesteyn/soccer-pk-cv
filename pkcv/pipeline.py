@@ -196,13 +196,22 @@ def process(
             except VisionUnavailable as exc:
                 notes.append(f"{pk_id}: vision skipped -- {exc}")
                 continue
+            except Exception as exc:
+                log.exception("vision failed for %s", pk_id)
+                notes.append(f"{pk_id}: vision failed -- {type(exc).__name__}: {exc}")
+                continue
 
         if not len(tracks):
             notes.append(f"{pk_id}: no tracks; nothing to anchor")
             continue
 
-        f = temporal.build_frames(row, tracks, poses, ball)
-        s = temporal.build_snapshots(f, row)
+        try:
+            f = temporal.build_frames(row, tracks, poses, ball)
+            s = temporal.build_snapshots(f, row)
+        except Exception as exc:  # one bad clip must not abort the corpus
+            log.exception("temporal build failed for %s", pk_id)
+            notes.append(f"{pk_id}: temporal build failed -- {type(exc).__name__}: {exc}")
+            continue
         if len(f):
             frames_out.append(f)
         if len(s):
