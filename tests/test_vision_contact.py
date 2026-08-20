@@ -13,9 +13,12 @@ from pkcv.vision.runner import ClipProcessor, VisionConfig
 
 
 def _geometry(width=600.0, n=10):
+    """A goal spanning x 100-700, y 50-300. The penalty spot fixtures below sit
+    at (500, 600), well outside it, as a real spot does."""
     return pd.DataFrame(
         [{"frame_idx": i, "goal_width_px": width, "is_missing": False,
-          "quad_tl_x": 100.0, "quad_tr_x": 700.0, "quad_tl_y": 50.0, "quad_bl_y": 300.0}
+          "quad_tl_x": 100.0, "quad_tl_y": 50.0, "quad_tr_x": 700.0, "quad_tr_y": 50.0,
+          "quad_br_x": 700.0, "quad_br_y": 300.0, "quad_bl_x": 100.0, "quad_bl_y": 300.0}
          for i in range(n)]
     )
 
@@ -64,7 +67,7 @@ def test_a_ball_that_never_settles_yields_no_contact(proc):
     ys = [600.0] * len(frames)
     out = proc._contact_frame(_balls(frames, xs, ys), _geometry(), fps=50.0)
     assert out["frame_idx"] is None
-    assert out["reason"] == "no_stationary_ball_track_found"
+    assert out["reason"].startswith("no_stationary_ball_track_found")
 
 
 def test_contact_needs_goal_geometry_for_scale(proc):
@@ -82,6 +85,23 @@ def test_no_ball_detections_is_reported_not_guessed(proc):
     out = proc._contact_frame(pd.DataFrame(), _geometry(), fps=50.0)
     assert out["frame_idx"] is None
     assert out["reason"] == "no_ball_detections"
+
+
+def test_a_ball_resting_inside_the_goal_is_not_the_penalty_ball(proc):
+    """A static false positive on the net is stationary for the whole clip.
+
+    On real footage this beat the real ball on "longest still run" and anchored
+    contact on a phantom inside the goal mouth, which then handed the kicker
+    role to a bystander standing near the posts.
+    """
+    phantom = _balls(list(range(0, 80)), [400.0] * 80, [150.0] * 80, track_id=9)  # inside the goal
+    real = _balls(list(range(0, 40)), [500.0] * 40, [600.0] * 40, track_id=1)
+    out = proc._contact_frame(pd.concat([phantom, real], ignore_index=True), _geometry(), fps=50.0)
+    assert out["frame_idx"] == 40, "must anchor on the ball outside the goal mouth"
+
+    only_phantom = proc._contact_frame(phantom, _geometry(), fps=50.0)
+    assert only_phantom["frame_idx"] is None
+    assert only_phantom["reason"] == "no_stationary_ball_track_found_outside_the_goal"
 
 
 def test_the_stationary_ball_wins_over_a_longer_moving_track(proc):

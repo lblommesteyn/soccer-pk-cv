@@ -203,7 +203,9 @@ class ClipProcessor:
         if contact["frame_idx"] is None and contact.get("reason"):
             result.failures.append(f"contact:{contact['reason']}")
 
-        roles = self._assign_roles(persons, result.geometry, balls, contact["frame_idx"])
+        roles = self._assign_roles(
+            persons, result.geometry, balls, contact["frame_idx"], contact.get("spot")
+        )
         persons = persons.merge(roles, on="track_id", how="left")
         persons["role"] = persons["role"].fillna("other")
         result.roles = roles
@@ -304,6 +306,7 @@ class ClipProcessor:
         geometry: pd.DataFrame | None = None,
         balls: pd.DataFrame | None = None,
         contact_frame: int | None = None,
+        spot: tuple[float, float] | None = None,
     ) -> pd.DataFrame:
         """Assign kicker and keeper.
 
@@ -369,8 +372,13 @@ class ClipProcessor:
             # the tracker loses it the moment it is struck. The kicker is the
             # player standing over the spot, so the last observed ball position
             # at or before contact is the right anchor, and it is the spot.
-            ball_at_contact = None
-            if balls is not None and len(balls) and contact_frame is not None:
+            # Use the spot the contact detector actually anchored on. Taking the
+            # last ball row from *any* track instead is wrong whenever a static
+            # false positive exists: on real footage it returned a phantom on
+            # the goal frame and handed the kicker role to a bystander standing
+            # by the posts, even though contact itself was correct.
+            ball_at_contact = spot
+            if ball_at_contact is None and balls is not None and len(balls) and contact_frame is not None:
                 upto = balls[balls["frame_idx"] <= contact_frame]
                 if len(upto):
                     last = upto.sort_values("frame_idx").iloc[-1]
@@ -383,7 +391,13 @@ class ClipProcessor:
                     (persons["frame_idx"] >= contact_frame - w)
                     & (persons["frame_idx"] <= contact_frame + w)
                 ]
-                near = near[near["track_id"].isin(remaining.index)]
+                # Deliberately NOT restricted to long-lived tracks. The keeper
+                # must persist to be the keeper, but the kicker only has to
+                # exist at contact -- and in a crowded foreground the tracker
+                # fragments him into short ids, so a length filter drops the
+                # real kicker and hands the role to a bystander who happened to
+                # be tracked continuously.
+                near = near[near["track_id"] != keeper]
                 if len(near):
                     bx, by = ball_at_contact
                     d = np.hypot(near["cx"] - bx, near["cy"] - by) / near["h"].clip(lower=1)
@@ -399,7 +413,10 @@ class ClipProcessor:
                 kicker_basis = "greatest_travel_no_contact_anchor"
 
         rows = []
-        for tid in agg.index:
+        ids = list(agg.index)
+        if kicker is not None and kicker not in ids:
+            ids.append(kicker)
+        for tid in ids:
             if tid == keeper:
                 role, conf, basis = "keeper", keeper_conf, keeper_basis
             elif kicker is not None and tid == kicker:
@@ -664,6 +681,12 @@ class ClipProcessor:
         tol = self.cfg.spot_tol_goal_widths * scale
         min_still = max(int(self.cfg.min_stationary_s * fps), 5)
 
+        # A static false positive on the net or the stanchion is stationary for
+        # the whole clip and so beats the real ball on "longest still run". The
+        # penalty spot is in front of the goal, never inside the mouth, so any
+        # candidate resting inside the goal polygon is rejected outright.
+        goal_poly = _goal_polygon(geometry)
+
         # Score each track by how long it stays inside a tol-sized box.
         best = None
         for tid, g in balls.groupby("track_id"):
@@ -672,6 +695,8 @@ class ClipProcessor:
                 continue
             spot_x = float(g["cx"].iloc[: max(len(g) // 2, 3)].median())
             spot_y = float(g["cy"].iloc[: max(len(g) // 2, 3)].median())
+            if goal_poly is not None and _inside(goal_poly, spot_x, spot_y):
+                continue
             near = (np.hypot(g["cx"] - spot_x, g["cy"] - spot_y) <= tol).to_numpy()
             run = 0
             for v in near:
@@ -682,7 +707,12 @@ class ClipProcessor:
                 best = {"tid": tid, "g": g, "spot": (spot_x, spot_y), "near": near, "run": run}
 
         if best is None:
-            return {**miss, "reason": "no_stationary_ball_track_found"}
+            return {
+                **miss,
+                "reason": "no_stationary_ball_track_found_outside_the_goal"
+                if goal_poly is not None
+                else "no_stationary_ball_track_found",
+            }
 
         g, near, run = best["g"], best["near"], best["run"]
         frames = g["frame_idx"].to_numpy(int)
@@ -694,6 +724,7 @@ class ClipProcessor:
                 "confidence": float(np.clip(run / (self.cfg.min_stationary_s * fps * 2), 0.3, 0.9)),
                 "method": "stationary_ball_departure_observed",
                 "reason": None,
+                "spot": best["spot"],
             }
 
         # The track ends while still on the spot: the tracker lost the struck
@@ -704,6 +735,7 @@ class ClipProcessor:
             "confidence": 0.45,
             "method": "stationary_ball_track_ends_on_spot",
             "reason": None,
+            "spot": best["spot"],
         }
 
     def _event_rows(self, pk_id, source, persons, balls, kicker_id, keeper_id, contact, fps) -> pd.DataFrame:
@@ -885,6 +917,31 @@ def _reject_inconsistent_goals(df: pd.DataFrame, prov: dict) -> pd.DataFrame:
     df.loc[bad, "is_missing"] = True
     df.loc[bad, "missing_reason"] = "goal_inconsistent_with_clip_consensus"
     return df
+
+
+def _goal_polygon(geometry: pd.DataFrame | None):
+    """Median goal quad across the clip, as a 4x2 array, or None."""
+    needed = {"quad_tl_x", "quad_tl_y", "quad_tr_x", "quad_tr_y",
+              "quad_br_x", "quad_br_y", "quad_bl_x", "quad_bl_y"}
+    if geometry is None or not len(geometry) or not needed <= set(geometry.columns):
+        return None
+    g = geometry[~geometry["is_missing"].astype(bool)]
+    if not len(g):
+        return None
+    pts = []
+    for cx, cy in (("quad_tl_x", "quad_tl_y"), ("quad_tr_x", "quad_tr_y"),
+                   ("quad_br_x", "quad_br_y"), ("quad_bl_x", "quad_bl_y")):
+        x, y = float(np.nanmedian(g[cx])), float(np.nanmedian(g[cy]))
+        if not (np.isfinite(x) and np.isfinite(y)):
+            return None
+        pts.append([x, y])
+    return np.asarray(pts, dtype=np.float32)
+
+
+def _inside(poly, x: float, y: float) -> bool:
+    import cv2
+
+    return cv2.pointPolygonTest(poly, (float(x), float(y)), False) >= 0
 
 def _goal_centre(geometry: pd.DataFrame | None, upto_frame: int | None = None):
     """Median goal-mouth centre and width over the frames where it was found."""
