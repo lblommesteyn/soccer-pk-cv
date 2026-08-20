@@ -54,6 +54,11 @@ class VisionConfig:
     #: Detection is cheap relative to a lost penalty, so failures are retried and
     #: the scale that produces the longest stationary ball run wins.
     retry_imgsz: tuple[int, ...] = (960, 1280, 1920)
+    #: Goal quads may be filled across gaps no longer than this. A camera pans
+    #: smoothly, so a goal seen either side of a short gap was there throughout;
+    #: across a long gap it may have left the frame entirely, and filling would
+    #: be invention. Filled rows are marked pkcv_interpolated.
+    goal_max_interp_frames: int = 15
     device: str = "cuda:0"
     half: bool = True
     person_conf: float = 0.35
@@ -624,7 +629,8 @@ class ClipProcessor:
         cap.release()
 
         df = pd.DataFrame(rows)
-        return _reject_inconsistent_goals(df, prov)
+        df = _reject_inconsistent_goals(df, prov)
+        return _interpolate_goal_gaps(df, self.cfg.goal_max_interp_frames)
 
     # ----------------------------------------------------------------- events
 
@@ -792,6 +798,53 @@ class ClipProcessor:
 # ------------------------------------------------------------------ helpers
 
 
+
+
+_GOAL_NUMERIC = [
+    "quad_tl_x", "quad_tl_y", "quad_tr_x", "quad_tr_y",
+    "quad_br_x", "quad_br_y", "quad_bl_x", "quad_bl_y",
+    "post_left_x", "post_left_y", "post_right_x", "post_right_y",
+    "crossbar_y", "goal_width_px", "goal_height_px", "px_per_m",
+]
+
+
+def _interpolate_goal_gaps(df: pd.DataFrame, max_gap: int) -> pd.DataFrame:
+    """Fill short goal-geometry gaps by interpolating between found frames.
+
+    A handheld camera pans smoothly, so a goal located on both sides of a short
+    gap was in shot throughout it and the detector simply missed it. Filling
+    those frames recovers real coverage. Across a long gap the goal may have
+    left the frame entirely, and filling would be invention, so the gap length
+    is bounded.
+
+    Filled rows carry ``derivation = pkcv_interpolated`` and a reduced
+    confidence, so an analysis can exclude them with one predicate.
+    """
+    if not len(df) or "goal_width_px" not in df or max_gap <= 0:
+        return df
+    df = df.sort_values("frame_idx").reset_index(drop=True)
+    found = np.where(~df["is_missing"].astype(bool).to_numpy())[0]
+    if len(found) < 2:
+        return df
+
+    for a, b in zip(found[:-1], found[1:], strict=False):
+        gap = b - a - 1
+        if gap <= 0 or gap > max_gap:
+            continue
+        for k in range(a + 1, b):
+            w = (k - a) / (b - a)
+            for col in _GOAL_NUMERIC:
+                if col in df:
+                    df.at[k, col] = float(df.at[a, col]) * (1 - w) + float(df.at[b, col]) * w
+            df.at[k, "is_missing"] = False
+            df.at[k, "missing_reason"] = None
+            df.at[k, "derivation"] = "pkcv_interpolated"
+            # Confidence is inherited from the weaker endpoint and discounted:
+            # this frame was never actually seen to contain a goal.
+            endpoints = [df.at[a, "confidence"], df.at[b, "confidence"]]
+            base = min(c for c in endpoints if pd.notna(c)) if any(pd.notna(c) for c in endpoints) else 0.3
+            df.at[k, "confidence"] = float(base) * 0.7
+    return df
 
 def _reject_inconsistent_goals(df: pd.DataFrame, prov: dict) -> pd.DataFrame:
     """Drop per-frame goal quads that disagree with the clip's own consensus.

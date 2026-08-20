@@ -147,3 +147,65 @@ def test_goal_coordinates_are_in_original_pixels_after_downscaling():
     assert g is not None
     assert g["post_left_x"] == pytest.approx(600, abs=30)
     assert g["post_right_x"] == pytest.approx(1400, abs=30)
+
+
+# ------------------------------------------------- goal gap interpolation
+
+
+def _geom_rows(found_frames, n, width=600.0):
+    import numpy as np
+
+    rows = []
+    for i in range(n):
+        if i in found_frames:
+            rows.append({
+                "frame_idx": i, "is_missing": False, "missing_reason": None,
+                "quad_tl_x": 100.0 + i, "quad_tl_y": 50.0, "quad_tr_x": 100.0 + i + width,
+                "quad_tr_y": 50.0, "quad_br_x": 100.0 + i + width, "quad_br_y": 300.0,
+                "quad_bl_x": 100.0 + i, "quad_bl_y": 300.0,
+                "post_left_x": 100.0 + i, "post_left_y": 300.0,
+                "post_right_x": 100.0 + i + width, "post_right_y": 300.0,
+                "crossbar_y": 50.0, "goal_width_px": width, "goal_height_px": 250.0,
+                "px_per_m": width / 7.32, "confidence": 0.8,
+                "derivation": "pkcv_derived",
+            })
+        else:
+            rows.append({
+                "frame_idx": i, "is_missing": True,
+                "missing_reason": "no_goal_like_structure_in_frame",
+                "confidence": np.nan, "derivation": "pkcv_derived",
+                **{c: np.nan for c in (
+                    "quad_tl_x", "quad_tl_y", "quad_tr_x", "quad_tr_y", "quad_br_x",
+                    "quad_br_y", "quad_bl_x", "quad_bl_y", "post_left_x", "post_left_y",
+                    "post_right_x", "post_right_y", "crossbar_y", "goal_width_px",
+                    "goal_height_px", "px_per_m")},
+            })
+    return pd.DataFrame(rows)
+
+
+def test_short_goal_gaps_are_filled_and_marked_interpolated():
+    from pkcv.vision.runner import _interpolate_goal_gaps
+
+    df = _interpolate_goal_gaps(_geom_rows({0, 6}, 7), max_gap=15)
+    assert not df["is_missing"].any(), "a 5-frame gap between sightings must be filled"
+    filled = df[df["derivation"] == "pkcv_interpolated"]
+    assert len(filled) == 5
+    # Interpolated frames must be visibly weaker evidence than seen ones.
+    assert (filled["confidence"] < 0.8).all()
+    # Linear across the pan.
+    assert df.at[3, "quad_tl_x"] == pytest.approx(103.0)
+
+
+def test_long_goal_gaps_are_left_missing():
+    from pkcv.vision.runner import _interpolate_goal_gaps
+
+    df = _interpolate_goal_gaps(_geom_rows({0, 40}, 41), max_gap=15)
+    assert df["is_missing"].sum() == 39, "a 39-frame gap must not be invented"
+
+
+def test_gaps_at_the_ends_are_never_extrapolated():
+    from pkcv.vision.runner import _interpolate_goal_gaps
+
+    df = _interpolate_goal_gaps(_geom_rows({4, 5}, 12), max_gap=15)
+    assert df.loc[0:3, "is_missing"].all(), "nothing before the first sighting"
+    assert df.loc[6:11, "is_missing"].all(), "nothing after the last sighting"
