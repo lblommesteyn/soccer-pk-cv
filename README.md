@@ -17,12 +17,32 @@ authorized sources → manifests → CV / pose ingest → canonical per-PK table
 
 ## Status
 
+**Sources**
+
 | | |
 | --- | --- |
 | Penalties discovered across all candidate sources | **603** |
-| Real penalty **video**, freely licensed | **49 clips** (Wikimedia Commons) |
-| Pose-table penalties, labelled but no footage | **220** (Mendeley) |
-| Gated behind an NDA or agreement form | **301** (SoccerNet, SoccerDB) |
+| Real penalty **video**, freely licensed (Wikimedia Commons) | 62 found, **49 usable**, 20 ingested |
+| Pose-table penalties, labelled but no footage (Mendeley) | **220** |
+| Gated behind an NDA or agreement form (SoccerNet, SoccerDB) | **301** |
+
+**What the vision stage actually recovers**, on the 20 ingested video penalties:
+
+| check | pass | note |
+| --- | --- | --- |
+| goalkeeper located | 20/20 | |
+| ball tracked | 18/20 | |
+| **ball contact anchored** | **14/20** | |
+| kicker tracked through the run-up | 12/20 | |
+| scene scale adequate | 14/20 | below ~85px player height the ball is untrackable |
+| goal located on >=60% of frames | 9/20 | the bottleneck |
+| **all four core checks pass** | **3/20** | the honest "fully parsed" count |
+
+Read the last row, not the third. A contact anchor alone does not mean the
+penalty was parsed correctly -- on one clip the anchor was right while the goal
+quad had latched onto a fence and the keeper was a player in midfield. The
+corpus is small and its quality is legible per clip in `qc.parquet` rather than
+averaged away.
 
 Run `python -m pkcv report` for the live version.
 
