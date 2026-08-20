@@ -52,6 +52,22 @@ class VisionConfig:
     #: A goalkeeper stands near the goal line; a kicker approaches from the
     #: penalty spot. Roles are assigned geometrically rather than by class.
     keeper_depth_quantile: float = 0.25
+    #: A broadcast goal is filmed at an angle, so posts are not vertical in the
+    #: image. This bounds how far from vertical a line may lean and still be a
+    #: post candidate.
+    post_max_lean_deg: float = 30.0
+    #: The goal is not visible in every frame of a clip, so probe several.
+    geometry_probe_frames: int = 12
+    #: A goal must span at least this fraction of the frame width, and its
+    #: width/height ratio must be plausible for a 7.32 x 2.44 m goal seen from
+    #: any angle (head-on is ~3.0; a very oblique view compresses it).
+    goal_min_width_frac: float = 0.15
+    goal_min_aspect: float = 1.2
+    goal_max_aspect: float = 8.0
+    #: The goal mouth is a mesh, so it is edge-dense. Broadcast graphics and
+    #: flat wall panels form the same two-posts-and-a-bar shape but are smooth;
+    #: measured on real footage the gap is 0.07-0.10 against 0.01-0.03.
+    net_min_edge_density: float = 0.05
 
     @classmethod
     def from_dict(cls, d: dict[str, Any] | None) -> VisionConfig:
@@ -127,7 +143,8 @@ class ClipProcessor:
             result.failures.append("no_person_detections")
             return result
 
-        roles = self._assign_roles(persons)
+        result.geometry = self._geometry_rows(pk_id, source, video_path)
+        roles = self._assign_roles(persons, result.geometry)
         persons = persons.merge(roles, on="track_id", how="left")
         persons["role"] = persons["role"].fillna("other")
 
@@ -137,7 +154,6 @@ class ClipProcessor:
         result.tracks = self._track_rows(pk_id, source, persons, fps, video_path)
         result.ball = self._ball_rows(pk_id, source, balls, fps, video_path)
         result.poses = self._pose_rows(pk_id, source, video_path, persons, kicker_id, keeper_id, fps)
-        result.geometry = self._geometry_rows(pk_id, source, video_path)
 
         contact = self._contact_frame(persons, balls, kicker_id, fps)
         result.events = self._event_rows(pk_id, source, persons, balls, kicker_id, keeper_id, contact, fps)
@@ -195,19 +211,29 @@ class ClipProcessor:
 
     # ------------------------------------------------------------------ roles
 
-    def _assign_roles(self, persons: pd.DataFrame) -> pd.DataFrame:
+    def _assign_roles(self, persons: pd.DataFrame, geometry: pd.DataFrame | None = None) -> pd.DataFrame:
         """Assign kicker / keeper by track geometry.
 
-        The keeper is the person who stays highest in frame (nearest the goal,
-        hence smallest ``cy``) across the clip; the kicker is the person whose
-        box travels the furthest, because they run up. Both are heuristics, and
-        both are recorded with a confidence so a downstream consumer can weigh
-        them -- there is no keeper/kicker class in COCO to appeal to.
+        There is no keeper class in COCO to appeal to, so roles are inferred:
+
+        * **keeper** -- the person who spends the clip closest to the goal
+          mouth, measured in goal-widths. This needs the goal, so when goal
+          geometry is missing it degrades to "the person highest in frame",
+          which is a much weaker proxy and is scored accordingly. On a wide
+          broadcast angle that fallback picks people beyond the touchline, so
+          the confidence it reports is deliberately low.
+        * **kicker** -- among the rest, the track whose box travels furthest
+          relative to its own height, because a penalty taker runs up.
+
+        Both are heuristics, and both carry a confidence so downstream code can
+        weigh them rather than trust them.
         """
+        empty = pd.DataFrame(columns=["track_id", "role", "role_confidence"])
         if not len(persons):
-            return pd.DataFrame(columns=["track_id", "role", "role_confidence"])
+            return empty
         agg = persons.groupby("track_id").agg(
             n=("frame_idx", "size"),
+            cx_med=("cx", "median"),
             cy_med=("cy", "median"),
             cx_span=("cx", lambda s: float(s.max() - s.min())),
             cy_span=("cy", lambda s: float(s.max() - s.min())),
@@ -216,22 +242,47 @@ class ClipProcessor:
         # Ignore blink-length tracks: they are detector noise, not people.
         agg = agg[agg["n"] >= max(3, int(0.1 * persons["frame_idx"].nunique()))]
         if not len(agg):
-            return pd.DataFrame(columns=["track_id", "role", "role_confidence"])
+            return empty
 
         agg["travel"] = np.hypot(agg["cx_span"], agg["cy_span"]) / agg["h_med"].clip(lower=1)
-        keeper = agg["cy_med"].idxmin()
+
+        goal = None
+        if geometry is not None and len(geometry) and not bool(geometry["is_missing"].iloc[0]):
+            g = geometry.iloc[0]
+            goal = (
+                (float(g["post_left_x"]) + float(g["post_right_x"])) / 2.0,
+                (float(g["crossbar_y"]) + float(max(g["post_left_y"], g["post_right_y"]))) / 2.0,
+                max(float(g["goal_width_px"]), 1.0),
+            )
+
+        if goal is not None:
+            gx, gy, gw = goal
+            agg["goal_dist"] = np.hypot(agg["cx_med"] - gx, agg["cy_med"] - gy) / gw
+            keeper = agg["goal_dist"].idxmin()
+            keeper_conf = _separation_conf(agg["goal_dist"], keeper, smaller_is_better=True)
+            keeper_basis = "nearest_goal_mouth"
+        else:
+            keeper = agg["cy_med"].idxmin()
+            # Halved: without the goal this is a proxy, not a measurement.
+            keeper_conf = 0.5 * _separation_conf(agg["cy_med"], keeper, smaller_is_better=True)
+            keeper_basis = "highest_in_frame_no_goal_geometry"
+
         remaining = agg.drop(index=keeper)
         kicker = remaining["travel"].idxmax() if len(remaining) else None
 
         rows = []
         for tid in agg.index:
             if tid == keeper:
-                role, conf = "keeper", _separation_conf(agg["cy_med"], keeper, smaller_is_better=True)
+                role, conf, basis = "keeper", keeper_conf, keeper_basis
             elif tid == kicker:
-                role, conf = "kicker", _separation_conf(remaining["travel"], kicker, smaller_is_better=False)
+                role = "kicker"
+                conf = _separation_conf(remaining["travel"], kicker, smaller_is_better=False)
+                basis = "greatest_travel"
             else:
-                role, conf = "other", None
-            rows.append({"track_id": int(tid), "role": role, "role_confidence": conf})
+                role, conf, basis = "other", None, None
+            rows.append(
+                {"track_id": int(tid), "role": role, "role_confidence": conf, "role_basis": basis}
+            )
         return pd.DataFrame(rows)
 
     # ------------------------------------------------------------------- rows
@@ -394,68 +445,132 @@ class ClipProcessor:
 
     # --------------------------------------------------------------- geometry
 
-    def _geometry_rows(self, pk_id, source, video_path) -> pd.DataFrame:
-        """Locate the goal frame from the two strongest near-vertical white lines.
+    def _goal_from_frame(self, frame) -> dict | None:
+        """Find the goal frame in one image, or return None.
 
-        Returns a missing row when the goal is not confidently found, which is
-        the common case on a tight kicker-side camera where the posts are out of
+        Two near-vertical lines wide apart are the posts; the highest point they
+        reach is the crossbar. Broadcast goals are filmed at an angle, so
+        "vertical" is generous. This is a heuristic, not a calibration, and the
+        confidence it returns says so.
+        """
+        import cv2
+
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        edges = cv2.Canny(gray, 60, 180)
+        lines = cv2.HoughLinesP(
+            edges, 1, np.pi / 180, threshold=60, minLineLength=frame.shape[0] // 8, maxLineGap=14
+        )
+        if lines is None or not len(lines):
+            return None
+        # OpenCV 4 returns (N, 1, 4); OpenCV 5 returns (N, 4). Normalise rather
+        # than indexing blind -- reading the wrong shape silently finds nothing,
+        # which looks exactly like "there is no goal here".
+        segs = np.asarray(lines, dtype=float).reshape(-1, 4)
+
+        dx = segs[:, 2] - segs[:, 0]
+        dy = segs[:, 3] - segs[:, 1]
+        length = np.hypot(dx, dy)
+        from_vertical = np.abs(np.degrees(np.arctan2(np.abs(dx), np.abs(dy) + 1e-6)))
+        keep = (from_vertical < self.cfg.post_max_lean_deg) & (length > frame.shape[0] * 0.06)
+        verticals = segs[keep]
+        if len(verticals) < 2:
+            return None
+
+        mid_x = (verticals[:, 0] + verticals[:, 2]) / 2
+        order = np.argsort(mid_x)
+        left, right = verticals[order[0]], verticals[order[-1]]
+        lx, rx = mid_x[order[0]], mid_x[order[-1]]
+        width = float(rx - lx)
+        if width < self.cfg.goal_min_width_frac * frame.shape[1]:
+            return None
+
+        crossbar_y = float(min(left[1], left[3], right[1], right[3]))
+        base_y = float(max(left[1], left[3], right[1], right[3]))
+        height = base_y - crossbar_y
+        if height <= 0 or not (self.cfg.goal_min_aspect < width / height < self.cfg.goal_max_aspect):
+            return None
+
+        roi = frame[max(int(crossbar_y), 0) : int(base_y), max(int(lx), 0) : int(rx)]
+        if roi.size == 0:
+            return None
+        net_density = float(
+            cv2.Canny(cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY), 50, 150).mean() / 255.0
+        )
+        if net_density < self.cfg.net_min_edge_density:
+            return None
+        return {
+            "net_edge_density": net_density,
+            "post_left_x": float(lx),
+            "post_left_y": float(max(left[1], left[3])),
+            "post_right_x": float(rx),
+            "post_right_y": float(max(right[1], right[3])),
+            "crossbar_y": crossbar_y,
+            "goal_width_px": width,
+            "goal_height_px": float(height),
+            # A regulation goal is 7.32 m wide; that fixes the scale along the
+            # goal line only, not across the pitch.
+            "px_per_m": width / 7.32,
+            # Two-line heuristic, not a calibration. Confidence tracks how
+            # net-like the mouth is rather than how many lines were found.
+            "confidence": float(np.clip(net_density / 0.12, 0.2, 0.75)),
+        }
+
+    def _geometry_rows(self, pk_id, source, video_path) -> pd.DataFrame:
+        """Locate the goal frame, probing several frames across the clip.
+
+        Probing only the first frame is wrong for any clip that opens on a
+        close-up: the goal is simply not in shot yet. The widest candidate found
+        across the probes wins, and its frame index is recorded.
+
+        Returns a missing row when no frame yields a confident goal, which is the
+        common case on a tight kicker-side camera where the posts are out of
         shot. Nothing is extrapolated.
         """
         import cv2
 
-        prov = _prov("opencv-lsd", cv2.__version__, f"pkcv:vision/geometry:{Path(video_path).name}")
-        cap = cv2.VideoCapture(str(video_path))
-        ok, frame = cap.read()
-        cap.release()
+        prov = _prov("opencv-hough", cv2.__version__, f"pkcv:vision/geometry:{Path(video_path).name}")
         miss = {
             "pk_id": pk_id,
             "source": source,
-            "frame_idx": 0,
+            "frame_idx": None,
             "is_missing": True,
             "missing_reason": "goal_frame_not_detected",
             **prov,
         }
-        if not ok:
+        cap = cv2.VideoCapture(str(video_path))
+        if not cap.isOpened():
             miss["missing_reason"] = "video_unreadable"
             return pd.DataFrame([miss])
+        n = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 1
+        probes = np.unique(
+            np.linspace(0, max(n - 1, 0), max(self.cfg.geometry_probe_frames, 1)).astype(int)
+        )
 
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        edges = cv2.Canny(gray, 60, 180)
-        lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=80, minLineLength=frame.shape[0] // 4, maxLineGap=12)
-        if lines is None:
+        best, best_frame, probed = None, None, 0
+        for f in probes:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, int(f))
+            ok, frame = cap.read()
+            if not ok:
+                continue
+            probed += 1
+            cand = self._goal_from_frame(frame)
+            if cand and (best is None or cand["net_edge_density"] > best["net_edge_density"]):
+                best, best_frame = cand, int(f)
+        cap.release()
+
+        if best is None:
+            miss["missing_reason"] = (
+                "video_unreadable" if probed == 0 else "no_goal_like_structure_in_probed_frames"
+            )
             return pd.DataFrame([miss])
-        verticals = [
-            ln[0]
-            for ln in lines
-            if abs(ln[0][2] - ln[0][0]) < 0.15 * abs(ln[0][3] - ln[0][1] or 1)
-        ]
-        if len(verticals) < 2:
-            return pd.DataFrame([miss])
-        verticals.sort(key=lambda ln: (ln[0] + ln[2]) / 2)
-        left, right = verticals[0], verticals[-1]
-        lx, rx = (left[0] + left[2]) / 2, (right[0] + right[2]) / 2
-        if rx - lx < 0.15 * frame.shape[1]:
-            miss["missing_reason"] = "candidate_posts_too_close_to_be_a_goal"
-            return pd.DataFrame([miss])
-        crossbar_y = float(min(left[1], left[3], right[1], right[3]))
-        goal_w = float(rx - lx)
+        best.pop("net_edge_density", None)
         return pd.DataFrame(
             [
                 {
                     "pk_id": pk_id,
                     "source": source,
-                    "frame_idx": 0,
-                    "post_left_x": float(lx),
-                    "post_left_y": float(max(left[1], left[3])),
-                    "post_right_x": float(rx),
-                    "post_right_y": float(max(right[1], right[3])),
-                    "crossbar_y": crossbar_y,
-                    "goal_width_px": goal_w,
-                    "goal_height_px": float(max(left[1], left[3]) - crossbar_y),
-                    # A regulation goal is 7.32 m wide; that fixes the scale
-                    # along the goal line only, not across the pitch.
-                    "px_per_m": goal_w / 7.32,
-                    "confidence": 0.4,  # two-line heuristic, not a calibration
+                    "frame_idx": best_frame,
+                    **best,
                     "is_missing": False,
                     "missing_reason": None,
                     **prov,
