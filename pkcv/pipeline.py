@@ -239,6 +239,7 @@ def run_qc(cfg: Config, overlay_limit: int = 5, pk_ids: list[str] | None = None)
     poses = read_parquet(cfg.paths.artifact("poses"), "poses")
     ball = read_parquet(cfg.paths.artifact("ball"), "ball")
     events = read_parquet(cfg.paths.artifact("events"), "events")
+    geometry = read_parquet(cfg.paths.artifact("geometry"), "geometry")
     frames = read_parquet(cfg.paths.artifact("temporal_frames"), "temporal_frames")
     snaps = read_parquet(cfg.paths.artifact("temporal_snapshots"), "temporal_snapshots")
 
@@ -258,6 +259,7 @@ def run_qc(cfg: Config, overlay_limit: int = 5, pk_ids: list[str] | None = None)
                 events[events["pk_id"] == pk],
                 snaps[snaps["pk_id"] == pk],
                 cfg.qc,
+                geometry[geometry["pk_id"] == pk],
             )
         )
     qc_df = pd.DataFrame(rows)

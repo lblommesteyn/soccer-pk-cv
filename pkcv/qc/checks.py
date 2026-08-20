@@ -27,6 +27,7 @@ DEFAULTS = {
     "fps_min": 10.0,
     "fps_max": 120.0,
     "min_frames": 10,
+    "min_goal_frames": 0.60,
 }
 
 
@@ -51,6 +52,7 @@ def check_kick(
     events: pd.DataFrame,
     snapshots: pd.DataFrame,
     thresholds: dict | None = None,
+    geometry: pd.DataFrame | None = None,
 ) -> list[dict]:
     th = {**DEFAULTS, **(thresholds or {})}
     pk_id, source = meta_row["pk_id"], meta_row["source"]
@@ -164,10 +166,38 @@ def check_kick(
     # ---- labels -----------------------------------------------------------
     have = [c for c in ("label_kick_direction", "label_goal", "label_footedness")
             if pd.notna(meta_row.get(c))]
-    out.append(
-        _row(pk_id, source, "labels_present", PASS if "label_kick_direction" in have else FAIL,
-             len(have), 1, message=f"labels: {', '.join(have) or 'none'}")
-    )
+    provenance = str(meta_row.get("label_provenance") or "")
+    if "label_kick_direction" in have:
+        status, msg = PASS, f"labels: {', '.join(have)}"
+    elif provenance.startswith("none"):
+        # The source publishes footage but no annotations. That is a property of
+        # the corpus, not a processing failure, so it warns rather than fails --
+        # but it still warns, because a kick with no direction label cannot be
+        # used to answer the question this dataset exists for.
+        status, msg = WARN, "source supplies no outcome labels; annotate before supervised use"
+    else:
+        status, msg = FAIL, "source supplies labels but this record has no kick direction"
+    out.append(_row(pk_id, source, "labels_present", status, len(have), 1, message=msg))
+
+    # ---- goal geometry (video sources only) --------------------------------
+    if pose_table_like:
+        out.append(
+            _row(pk_id, source, "goal_geometry", NA,
+                 message=f"source is {media}; no footage to recover the goal from")
+        )
+    elif geometry is None or not len(geometry):
+        out.append(_row(pk_id, source, "goal_geometry", FAIL, message="no geometry rows"))
+    else:
+        found = float((~geometry["is_missing"].astype(bool)).mean())
+        status = (
+            PASS if found >= th["min_goal_frames"]
+            else WARN if found > 0
+            else FAIL
+        )
+        out.append(
+            _row(pk_id, source, "goal_geometry", status, found, th["min_goal_frames"],
+                 message=f"goal located on {found:.0%} of frames")
+        )
     return out
 
 
