@@ -32,17 +32,24 @@ authorized sources → manifests → CV / pose ingest → canonical per-PK table
 | --- | --- | --- |
 | goalkeeper located | 20/20 | |
 | ball tracked | 18/20 | |
-| **ball contact anchored** | **14/20** | |
-| kicker tracked through the run-up | 12/20 | |
-| scene scale adequate | 14/20 | below ~85px player height the ball is untrackable |
-| goal located on >=60% of frames | 9/20 | the bottleneck |
-| **all four core checks pass** | **3/20** | the honest "fully parsed" count |
+| ball contact anchored | 12/20 | |
+| kicker really is at the ball at contact | 9/12 anchored | independent of the logic that picked the kicker |
+| kicker tracked through the run-up | 10/20 | |
+| scene scale adequate | 13/20 | below ~85px player height the ball is untrackable |
+| goal located on >=60% of frames | 9/20 | |
+| **all five core checks pass** | **3/20** | the honest "fully parsed" count |
 
 Read the last row, not the third. A contact anchor alone does not mean the
-penalty was parsed correctly -- on one clip the anchor was right while the goal
-quad had latched onto a fence and the keeper was a player in midfield. The
-corpus is small and its quality is legible per clip in `qc.parquet` rather than
-averaged away.
+penalty was parsed correctly. On the one clip that looked cleanest, contact,
+tracking and scale all passed while the kicker box sat on a bystander by the
+posts -- role assignment had matched against a static false-positive ball on
+the goal frame rather than the real one. Nothing in the metrics showed it; it
+took watching the video. `kicker_at_ball` now checks that case automatically,
+because it measures against the ball rather than against the reasoning that
+chose the kicker.
+
+The corpus is small and its quality is legible per clip in `qc.parquet` rather
+than averaged away.
 
 Run `python -m pkcv report` for the live version.
 

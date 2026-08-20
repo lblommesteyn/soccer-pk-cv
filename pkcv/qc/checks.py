@@ -35,6 +35,12 @@ DEFAULTS = {
     # constraint on whether a clip is processable at all.
     "warn_scene_scale_px": 85.0,
     "fail_scene_scale_px": 50.0,
+    # How far the kicker's box centre may sit from the ball at contact, in
+    # kicker body-heights. A player striking a ball is on top of it; correctly
+    # assigned clips measure 0.3-0.9 here. This catches the kicker role landing
+    # on a bystander, which no other check sees.
+    "warn_kicker_ball_dist": 1.5,
+    "fail_kicker_ball_dist": 3.0,
 }
 
 
@@ -188,6 +194,44 @@ def check_kick(
         )
     else:
         out.append(_row(pk_id, source, "snapshot_coverage", FAIL, message="no snapshots built"))
+
+    # ---- kicker really is at the ball --------------------------------------
+    # An independent consistency check: it uses the ball, not the reasoning that
+    # picked the kicker, so it catches role assignment latching onto the wrong
+    # person even when contact, tracking and scale all look fine.
+    if pose_table_like:
+        out.append(
+            _row(pk_id, source, "kicker_at_ball", NA,
+                 message=f"source is {media}; no ball to check the kicker against")
+        )
+    else:
+        cr = events[events["event_name"] == "ball_contact"] if len(events) else events
+        cf = int(cr["frame_idx"].iloc[0]) if (
+            len(cr) and pd.notna(cr["frame_idx"].iloc[0])) else None
+        bb = ball[(ball["frame_idx"] <= cf) & ball["x"].notna()] if (
+            cf is not None and len(ball) and "x" in ball) else None
+        kk = tracks[(tracks["role"] == "kicker") & tracks["frame_idx"].between(cf - 4, cf + 4)] if (
+            cf is not None and "role" in getattr(tracks, "columns", [])) else None
+        if cf is None:
+            out.append(_row(pk_id, source, "kicker_at_ball", NA,
+                            message="no contact anchor to check against"))
+        elif bb is None or not len(bb) or kk is None or not len(kk):
+            out.append(_row(pk_id, source, "kicker_at_ball", FAIL,
+                            message="no ball or kicker observation near contact"))
+        else:
+            bl = bb.sort_values("frame_idx").iloc[-1]
+            k = kk.iloc[len(kk) // 2]
+            d = float(np.hypot(k["bbox_cx"] - bl["x"], k["bbox_cy"] - bl["y"])
+                      / max(float(k["bbox_h"] or 1), 1.0))
+            status = (
+                PASS if d <= th["warn_kicker_ball_dist"]
+                else WARN if d <= th["fail_kicker_ball_dist"]
+                else FAIL
+            )
+            out.append(
+                _row(pk_id, source, "kicker_at_ball", status, d, th["warn_kicker_ball_dist"],
+                     message=f"kicker sits {d:.2f} body-heights from the ball at contact")
+            )
 
     # ---- labels -----------------------------------------------------------
     have = [c for c in ("label_kick_direction", "label_goal", "label_footedness")
